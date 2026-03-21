@@ -4,7 +4,7 @@
   "imports": {
     "decision_received": false,
     "report_roles_received": [],
-    "task_review_received": false
+    "task_review_received": true
   },
   "openclaw": {
     "agent_prefix": "eco-demo",
@@ -26,6 +26,6 @@
   },
   "run_dir": "/home/fpddmw/projects/skills/runs/eco-demo",
   "schema_version": "1.0.0",
-  "stage": "awaiting-moderator-task-review",
-  "updated_at_utc": "2026-03-21T12:48:11Z"
+  "stage": "ready-to-prepare-round",
+  "updated_at_utc": "2026-03-21T13:23:00Z"
 }

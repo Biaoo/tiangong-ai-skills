@@ -20,12 +20,13 @@ The supervisor keeps a strict split:
 - `RUN_DIR/supervisor/state.json`
 - `RUN_DIR/supervisor/sessions/*.txt`
 - `RUN_DIR/supervisor/outbox/*.txt`
+- `RUN_DIR/supervisor/responses/*`
 
 ## Stage Map
 
 - `awaiting-moderator-task-review`
-  - Send the moderator session prompt and task-review outbox prompt.
-  - Import the returned JSON with `import-task-review`.
+  - Prefer `run-agent-step`.
+  - Manual fallback: send the moderator session prompt and task-review outbox prompt, then use `import-task-review`.
 - `ready-to-prepare-round`
   - Run `continue-run`.
 - `ready-to-execute-fetch-plan`
@@ -33,11 +34,11 @@ The supervisor keeps a strict split:
 - `ready-to-run-data-plane`
   - Run `continue-run`.
 - `awaiting-expert-reports`
-  - Send the two expert outbox prompts.
-  - Import each JSON with `import-report`.
+  - Prefer `run-agent-step --role sociologist` and `run-agent-step --role environmentalist`.
+  - Manual fallback: send the two expert outbox prompts, then use `import-report`.
 - `awaiting-moderator-decision`
-  - Send the moderator decision outbox prompt.
-  - Import the JSON with `import-decision`.
+  - Prefer `run-agent-step`.
+  - Manual fallback: send the moderator decision outbox prompt, then use `import-decision`.
 - `ready-to-promote`
   - Run `continue-run`.
 - `ready-to-advance-round`

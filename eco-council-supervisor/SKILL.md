@@ -29,6 +29,8 @@ Use this skill when the eco-council flow should be driven by one deterministic l
   - Shows current round, stage, outbox prompts, and `CURRENT_STEP.txt`.
 - `python3 scripts/eco_council_supervisor.py continue-run --run-dir ... --pretty`
   - Runs exactly one approved shell stage.
+- `python3 scripts/eco_council_supervisor.py run-agent-step --run-dir ... --pretty`
+  - Sends the current moderator/expert turn to OpenClaw, captures JSON, validates it, and imports it automatically.
 - `python3 scripts/eco_council_supervisor.py import-task-review ...`
 - `python3 scripts/eco_council_supervisor.py import-report ...`
 - `python3 scripts/eco_council_supervisor.py import-decision ...`

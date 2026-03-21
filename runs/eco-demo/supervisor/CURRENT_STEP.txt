@@ -1,11 +1,5 @@
 Current round: round-001
-Current stage: awaiting-moderator-task-review
+Current stage: ready-to-prepare-round
 
-1. Open the moderator session prompt:
-/home/fpddmw/projects/skills/runs/eco-demo/supervisor/sessions/moderator_session_prompt.txt
-
-2. Send this turn prompt to the moderator agent:
-/home/fpddmw/projects/skills/runs/eco-demo/supervisor/outbox/moderator_task_review.txt
-
-3. Save the moderator JSON reply to any local file, then import it:
-python3 /home/fpddmw/projects/skills/eco-council-supervisor/scripts/eco_council_supervisor.py import-task-review --run-dir /home/fpddmw/projects/skills/runs/eco-demo --input /path/to/moderator_tasks.json --pretty
+Run the next approved shell stage:
+python3 /home/fpddmw/projects/skills/eco-council-supervisor/scripts/eco_council_supervisor.py continue-run --run-dir /home/fpddmw/projects/skills/runs/eco-demo --pretty

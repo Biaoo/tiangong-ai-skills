@@ -116,6 +116,10 @@ def tasks_path(run_dir: Path, round_id: str) -> Path:
     return round_dir(run_dir, round_id) / "moderator" / "tasks.json"
 
 
+def mission_path(run_dir: Path) -> Path:
+    return run_dir / "mission.json"
+
+
 def task_review_prompt_path(run_dir: Path, round_id: str) -> Path:
     return round_dir(run_dir, round_id) / "moderator" / "derived" / "openclaw_task_review_prompt.txt"
 
@@ -132,12 +136,20 @@ def report_prompt_path(run_dir: Path, round_id: str, role: str) -> Path:
     return round_dir(run_dir, round_id) / role / "derived" / "openclaw_report_prompt.txt"
 
 
+def report_packet_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "derived" / "report_packet.json"
+
+
 def decision_draft_path(run_dir: Path, round_id: str) -> Path:
     return round_dir(run_dir, round_id) / "moderator" / "derived" / "council_decision_draft.json"
 
 
 def decision_prompt_path(run_dir: Path, round_id: str) -> Path:
     return round_dir(run_dir, round_id) / "moderator" / "derived" / "openclaw_decision_prompt.txt"
+
+
+def decision_packet_path(run_dir: Path, round_id: str) -> Path:
+    return round_dir(run_dir, round_id) / "moderator" / "derived" / "decision_packet.json"
 
 
 def decision_target_path(run_dir: Path, round_id: str) -> Path:
@@ -160,8 +172,17 @@ def supervisor_outbox_dir(run_dir: Path) -> Path:
     return supervisor_dir(run_dir) / "outbox"
 
 
+def supervisor_responses_dir(run_dir: Path) -> Path:
+    return supervisor_dir(run_dir) / "responses"
+
+
 def supervisor_current_step_path(run_dir: Path) -> Path:
     return supervisor_dir(run_dir) / "CURRENT_STEP.txt"
+
+
+def response_base_path(run_dir: Path, round_id: str, role: str, kind: str) -> Path:
+    safe_kind = kind.replace("-", "_")
+    return supervisor_responses_dir(run_dir) / f"{round_id}_{role}_{safe_kind}"
 
 
 def extract_json_suffix(text: str) -> Any:
@@ -318,6 +339,14 @@ def build_current_step_text(run_dir: Path, state: dict[str, Any]) -> str:
     if stage == STAGE_AWAITING_TASK_REVIEW:
         lines.extend(
             [
+                "Preferred: run the moderator turn automatically:",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --pretty",
+                "",
+                "Manual fallback:",
                 "1. Open the moderator session prompt:",
                 str(session_prompt_path(run_dir, "moderator")),
                 "",
@@ -368,6 +397,19 @@ def build_current_step_text(run_dir: Path, state: dict[str, Any]) -> str:
     elif stage == STAGE_AWAITING_REPORTS:
         lines.extend(
             [
+                "Preferred: run the two expert turns automatically, one by one:",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --role sociologist --pretty",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --role environmentalist --pretty",
+                "",
+                "Manual fallback:",
                 "1. Open the sociologist session prompt:",
                 str(session_prompt_path(run_dir, "sociologist")),
                 "",
@@ -394,6 +436,14 @@ def build_current_step_text(run_dir: Path, state: dict[str, Any]) -> str:
     elif stage == STAGE_AWAITING_DECISION:
         lines.extend(
             [
+                "Preferred: run the moderator decision turn automatically:",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --pretty",
+                "",
+                "Manual fallback:",
                 "1. Open the moderator session prompt:",
                 str(session_prompt_path(run_dir, "moderator")),
                 "",
@@ -585,6 +635,10 @@ def validate_input_file(kind: str, input_path: Path) -> None:
     )
 
 
+def load_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
 def ensure_task_review_matches(payload: Any, *, round_id: str) -> None:
     if not isinstance(payload, list):
         raise ValueError("Task review payload must be a JSON list.")
@@ -613,6 +667,221 @@ def ensure_decision_matches(payload: Any, *, round_id: str) -> None:
     payload_round_id = maybe_text(payload.get("round_id"))
     if payload_round_id and payload_round_id != round_id:
         raise ValueError(f"Decision round_id mismatch: expected {round_id}, got {payload_round_id}")
+
+
+def import_task_review_payload(*, run_dir: Path, state: dict[str, Any], payload: Any, source_path: Path) -> dict[str, Any]:
+    round_id = maybe_text(state.get("current_round_id"))
+    ensure_task_review_matches(payload, round_id=round_id)
+    target = tasks_path(run_dir, round_id)
+    write_json(target, payload, pretty=True)
+    state["stage"] = STAGE_READY_PREPARE
+    state["imports"] = {
+        "task_review_received": True,
+        "report_roles_received": [],
+        "decision_received": False,
+    }
+    save_state(run_dir, state)
+    return {
+        "imported_kind": "round-task",
+        "input_path": str(source_path),
+        "target_path": str(target),
+        "state": build_status_payload(run_dir, state),
+    }
+
+
+def import_report_payload(*, run_dir: Path, state: dict[str, Any], role: str, payload: Any, source_path: Path) -> dict[str, Any]:
+    round_id = maybe_text(state.get("current_round_id"))
+    ensure_report_matches(payload, round_id=round_id, role=role)
+    target = report_draft_path(run_dir, round_id, role)
+    write_json(target, payload, pretty=True)
+
+    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
+    received = {maybe_text(item) for item in imports.get("report_roles_received", []) if maybe_text(item)}
+    received.add(role)
+    imports["report_roles_received"] = sorted(received)
+    state["imports"] = imports
+    state["stage"] = STAGE_AWAITING_DECISION if received == set(REPORT_ROLES) else STAGE_AWAITING_REPORTS
+    save_state(run_dir, state)
+    return {
+        "imported_kind": "expert-report",
+        "role": role,
+        "input_path": str(source_path),
+        "target_path": str(target),
+        "state": build_status_payload(run_dir, state),
+    }
+
+
+def import_decision_payload(*, run_dir: Path, state: dict[str, Any], payload: Any, source_path: Path) -> dict[str, Any]:
+    round_id = maybe_text(state.get("current_round_id"))
+    ensure_decision_matches(payload, round_id=round_id)
+    target = decision_draft_path(run_dir, round_id)
+    write_json(target, payload, pretty=True)
+
+    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
+    imports["decision_received"] = True
+    state["imports"] = imports
+    state["stage"] = STAGE_READY_PROMOTE
+    save_state(run_dir, state)
+    return {
+        "imported_kind": "council-decision",
+        "input_path": str(source_path),
+        "target_path": str(target),
+        "state": build_status_payload(run_dir, state),
+    }
+
+
+def current_agent_turn(*, state: dict[str, Any], requested_role: str) -> tuple[str, str, str]:
+    stage = maybe_text(state.get("stage"))
+    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
+    requested = maybe_text(requested_role)
+
+    if stage == STAGE_AWAITING_TASK_REVIEW:
+        if requested and requested != "moderator":
+            raise ValueError("Current stage only accepts role=moderator.")
+        return ("moderator", "task-review", "round-task")
+
+    if stage == STAGE_AWAITING_DECISION:
+        if requested and requested != "moderator":
+            raise ValueError("Current stage only accepts role=moderator.")
+        return ("moderator", "decision", "council-decision")
+
+    if stage == STAGE_AWAITING_REPORTS:
+        missing = [role for role in REPORT_ROLES if role not in {maybe_text(item) for item in imports.get("report_roles_received", [])}]
+        if requested:
+            if requested not in REPORT_ROLES:
+                raise ValueError("Report stage requires role=sociologist or role=environmentalist.")
+            if requested not in missing:
+                raise ValueError(f"Role {requested} has already been imported for this round.")
+            return (requested, "report", "expert-report")
+        if len(missing) == 1:
+            return (missing[0], "report", "expert-report")
+        raise ValueError("Current stage needs --role sociologist or --role environmentalist.")
+
+    raise ValueError(f"Current stage does not accept agent turns: {stage}")
+
+
+def build_agent_message(*, run_dir: Path, state: dict[str, Any], role: str, turn_kind: str) -> str:
+    round_id = maybe_text(state.get("current_round_id"))
+    session_text = load_text(session_prompt_path(run_dir, role))
+
+    if turn_kind == "task-review":
+        prompt_text = load_text(task_review_prompt_path(run_dir, round_id))
+        mission_text = load_text(mission_path(run_dir))
+        tasks_text = load_text(tasks_path(run_dir, round_id))
+        return "\n\n".join(
+            [
+                session_text,
+                (
+                    f"Current automated turn: moderator task review for {round_id}.\n"
+                    "All referenced file contents are embedded below. Do not ask for filesystem access. "
+                    "Return only the final JSON list."
+                ),
+                "=== TASK REVIEW PROMPT ===\n" + prompt_text,
+                "=== MISSION.JSON ===\n" + mission_text,
+                "=== CURRENT TASKS.JSON ===\n" + tasks_text,
+            ]
+        )
+
+    if turn_kind == "report":
+        prompt_text = load_text(report_prompt_path(run_dir, round_id, role))
+        packet_text = load_text(report_packet_path(run_dir, round_id, role))
+        return "\n\n".join(
+            [
+                session_text,
+                (
+                    f"Current automated turn: {role} report drafting for {round_id}.\n"
+                    "The required packet content is embedded below. Do not ask for filesystem access. "
+                    "Return only the final JSON object."
+                ),
+                "=== REPORT PROMPT ===\n" + prompt_text,
+                "=== REPORT PACKET.JSON ===\n" + packet_text,
+            ]
+        )
+
+    if turn_kind == "decision":
+        prompt_text = load_text(decision_prompt_path(run_dir, round_id))
+        packet_text = load_text(decision_packet_path(run_dir, round_id))
+        return "\n\n".join(
+            [
+                session_text,
+                (
+                    f"Current automated turn: moderator decision drafting for {round_id}.\n"
+                    "The required packet content is embedded below. Do not ask for filesystem access. "
+                    "Return only the final JSON object."
+                ),
+                "=== DECISION PROMPT ===\n" + prompt_text,
+                "=== DECISION PACKET.JSON ===\n" + packet_text,
+            ]
+        )
+
+    raise ValueError(f"Unsupported agent turn kind: {turn_kind}")
+
+
+def run_openclaw_agent_turn(
+    *,
+    run_dir: Path,
+    state: dict[str, Any],
+    role: str,
+    turn_kind: str,
+    schema_kind: str,
+    message: str,
+    timeout_seconds: int,
+    thinking: str,
+) -> dict[str, Any]:
+    round_id = maybe_text(state.get("current_round_id"))
+    agent_id = maybe_text(state.get("openclaw", {}).get("agents", {}).get(role, {}).get("id"))
+    if not agent_id:
+        raise ValueError(f"No configured OpenClaw agent id for role={role}")
+
+    base_path = response_base_path(run_dir, round_id, role, turn_kind)
+    stdout_path = base_path.with_suffix(".stdout.txt")
+    stderr_path = base_path.with_suffix(".stderr.txt")
+    json_path = base_path.with_suffix(".json")
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+
+    argv = [
+        "openclaw",
+        "--no-color",
+        "agent",
+        "--agent",
+        agent_id,
+        "--local",
+        "--message",
+        message,
+        "--timeout",
+        str(timeout_seconds),
+    ]
+    if thinking:
+        argv.extend(["--thinking", thinking])
+
+    completed = subprocess.run(
+        argv,
+        cwd=str(REPO_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout_path.write_text(completed.stdout, encoding="utf-8")
+    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"OpenClaw agent turn failed for role={role}. "
+            f"See {stdout_path} and {stderr_path}."
+        )
+
+    payload = extract_json_suffix(completed.stdout)
+    write_json(json_path, payload, pretty=True)
+    validate_input_file(schema_kind, json_path)
+    return {
+        "agent_id": agent_id,
+        "role": role,
+        "turn_kind": turn_kind,
+        "schema_kind": schema_kind,
+        "response_json_path": str(json_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "payload": payload,
+    }
 
 
 def command_init_run(args: argparse.Namespace) -> dict[str, Any]:
@@ -811,22 +1080,7 @@ def command_import_task_review(args: argparse.Namespace) -> dict[str, Any]:
     round_id = maybe_text(state.get("current_round_id"))
     validate_input_file("round-task", input_path)
     payload = read_json(input_path)
-    ensure_task_review_matches(payload, round_id=round_id)
-    target = tasks_path(run_dir, round_id)
-    write_json(target, payload, pretty=True)
-    state["stage"] = STAGE_READY_PREPARE
-    state["imports"] = {
-        "task_review_received": True,
-        "report_roles_received": [],
-        "decision_received": False,
-    }
-    save_state(run_dir, state)
-    return {
-        "imported_kind": "round-task",
-        "input_path": str(input_path),
-        "target_path": str(target),
-        "state": build_status_payload(run_dir, state),
-    }
+    return import_task_review_payload(run_dir=run_dir, state=state, payload=payload, source_path=input_path)
 
 
 def command_import_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -839,24 +1093,7 @@ def command_import_report(args: argparse.Namespace) -> dict[str, Any]:
     round_id = maybe_text(state.get("current_round_id"))
     validate_input_file("expert-report", input_path)
     payload = read_json(input_path)
-    ensure_report_matches(payload, round_id=round_id, role=role)
-    target = report_draft_path(run_dir, round_id, role)
-    write_json(target, payload, pretty=True)
-
-    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
-    received = {maybe_text(item) for item in imports.get("report_roles_received", []) if maybe_text(item)}
-    received.add(role)
-    imports["report_roles_received"] = sorted(received)
-    state["imports"] = imports
-    state["stage"] = STAGE_AWAITING_DECISION if received == set(REPORT_ROLES) else STAGE_AWAITING_REPORTS
-    save_state(run_dir, state)
-    return {
-        "imported_kind": "expert-report",
-        "role": role,
-        "input_path": str(input_path),
-        "target_path": str(target),
-        "state": build_status_payload(run_dir, state),
-    }
+    return import_report_payload(run_dir=run_dir, state=state, role=role, payload=payload, source_path=input_path)
 
 
 def command_import_decision(args: argparse.Namespace) -> dict[str, Any]:
@@ -868,20 +1105,56 @@ def command_import_decision(args: argparse.Namespace) -> dict[str, Any]:
     round_id = maybe_text(state.get("current_round_id"))
     validate_input_file("council-decision", input_path)
     payload = read_json(input_path)
-    ensure_decision_matches(payload, round_id=round_id)
-    target = decision_draft_path(run_dir, round_id)
-    write_json(target, payload, pretty=True)
+    return import_decision_payload(run_dir=run_dir, state=state, payload=payload, source_path=input_path)
 
-    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
-    imports["decision_received"] = True
-    state["imports"] = imports
-    state["stage"] = STAGE_READY_PROMOTE
-    save_state(run_dir, state)
+
+def command_run_agent_step(args: argparse.Namespace) -> dict[str, Any]:
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    state = load_state(run_dir)
+    role, turn_kind, schema_kind = current_agent_turn(state=state, requested_role=args.role)
+    approved = ask_for_approval(
+        f"About to run OpenClaw agent turn {turn_kind} for role={role} in {maybe_text(state.get('current_round_id'))}.",
+        assume_yes=args.yes,
+    )
+    if not approved:
+        return {
+            "approved": False,
+            "state": build_status_payload(run_dir, state),
+        }
+
+    message = build_agent_message(run_dir=run_dir, state=state, role=role, turn_kind=turn_kind)
+    result = run_openclaw_agent_turn(
+        run_dir=run_dir,
+        state=state,
+        role=role,
+        turn_kind=turn_kind,
+        schema_kind=schema_kind,
+        message=message,
+        timeout_seconds=args.timeout_seconds,
+        thinking=args.thinking,
+    )
+    response_path = Path(result["response_json_path"]).resolve()
+    payload = result["payload"]
+    if schema_kind == "round-task":
+        imported = import_task_review_payload(run_dir=run_dir, state=state, payload=payload, source_path=response_path)
+    elif schema_kind == "expert-report":
+        imported = import_report_payload(run_dir=run_dir, state=state, role=role, payload=payload, source_path=response_path)
+    elif schema_kind == "council-decision":
+        imported = import_decision_payload(run_dir=run_dir, state=state, payload=payload, source_path=response_path)
+    else:
+        raise ValueError(f"Unsupported schema kind: {schema_kind}")
+
     return {
-        "imported_kind": "council-decision",
-        "input_path": str(input_path),
-        "target_path": str(target),
-        "state": build_status_payload(run_dir, state),
+        "approved": True,
+        "agent_turn": {
+            "agent_id": result["agent_id"],
+            "role": role,
+            "turn_kind": turn_kind,
+            "response_json_path": result["response_json_path"],
+            "stdout_path": result["stdout_path"],
+            "stderr_path": result["stderr_path"],
+        },
+        "import_result": imported,
     }
 
 
@@ -1034,6 +1307,14 @@ def build_parser() -> argparse.ArgumentParser:
     continue_run.add_argument("--yes", action="store_true", help="Skip interactive approval.")
     continue_run.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
+    run_agent = sub.add_parser("run-agent-step", help="Send the current turn to OpenClaw, receive JSON, and import it.")
+    run_agent.add_argument("--run-dir", required=True, help="Eco-council run directory.")
+    run_agent.add_argument("--role", default="", choices=("", "moderator", "sociologist", "environmentalist"), help="Optional role override for expert-report stages.")
+    run_agent.add_argument("--timeout-seconds", type=int, default=600, help="OpenClaw agent timeout.")
+    run_agent.add_argument("--thinking", default="low", choices=("off", "minimal", "low", "medium", "high"), help="OpenClaw thinking level.")
+    run_agent.add_argument("--yes", action="store_true", help="Skip interactive approval.")
+    run_agent.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+
     import_task = sub.add_parser("import-task-review", help="Import moderator task-review JSON into tasks.json.")
     import_task.add_argument("--run-dir", required=True, help="Eco-council run directory.")
     import_task.add_argument("--input", required=True, help="JSON file returned by the moderator.")
@@ -1061,6 +1342,7 @@ def main(argv: list[str] | None = None) -> int:
         "provision-openclaw-agents": command_provision_openclaw_agents,
         "status": command_status,
         "continue-run": command_continue_run,
+        "run-agent-step": command_run_agent_step,
         "import-task-review": command_import_task_review,
         "import-report": command_import_report,
         "import-decision": command_import_decision,

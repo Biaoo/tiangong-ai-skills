@@ -1,8 +1,0 @@
-Use your moderator session rules.
-This is your current eco-council turn for round-001.
-
-Open and follow this file exactly:
-/home/fpddmw/projects/skills/runs/eco-demo/round_001/moderator/derived/openclaw_task_review_prompt.txt
-
-If this OpenClaw instance cannot open local files directly, ask the human to paste the file contents and then continue.
-Return only JSON.
