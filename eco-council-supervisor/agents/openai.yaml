@@ -1,4 +1,4 @@
 interface:
   display_name: "Eco Council Supervisor"
-  short_description: "Stage-gated eco council runner and history search"
-  default_prompt: "Use $eco-council-supervisor to run an eco-council workflow, search archived cases, or export a human-readable historical record."
+  short_description: "Stage-gated eco council runner and audit flow"
+  default_prompt: "Use $eco-council-supervisor to run an eco-council workflow with audited source selection, search archived cases, or export a human-readable historical record."

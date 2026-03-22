@@ -10,6 +10,8 @@ The supervisor keeps a strict split:
    - `advance-round`
 2. Agent stages
    - moderator task review
+   - sociologist source selection
+   - environmentalist source selection
    - sociologist report draft
    - environmentalist report draft
    - moderator decision draft
@@ -27,6 +29,9 @@ The supervisor keeps a strict split:
 - `awaiting-moderator-task-review`
   - Prefer `run-agent-step`.
   - Manual fallback: send the moderator session prompt and task-review outbox prompt, then use `import-task-review`.
+- `awaiting-source-selection`
+  - Prefer `run-agent-step --role sociologist` and `run-agent-step --role environmentalist`.
+  - Manual fallback: send the two expert source-selection outbox prompts, then use `import-source-selection`.
 - `ready-to-prepare-round`
   - Run `continue-run`.
 - `ready-to-execute-fetch-plan`

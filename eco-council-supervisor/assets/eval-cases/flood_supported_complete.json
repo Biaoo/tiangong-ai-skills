@@ -1,0 +1,266 @@
+{
+  "case_id": "flood_supported_complete",
+  "description": "Flood claim is sufficiently supported by hydrology signals and should close without another round.",
+  "round_id": "round-001",
+  "mission": {
+    "schema_version": "1.0.0",
+    "run_id": "eval-flood-supported-complete",
+    "topic": "Flood verification replay",
+    "objective": "Check that a supported flood claim closes cleanly.",
+    "window": {
+      "start_utc": "2026-03-03T00:00:00Z",
+      "end_utc": "2026-03-05T23:59:59Z"
+    },
+    "region": {
+      "label": "Brisbane River, Queensland, Australia",
+      "geometry": {
+        "type": "Point",
+        "latitude": -27.4698,
+        "longitude": 153.0251
+      }
+    },
+    "hypotheses": [
+      "Public flood reports align with elevated river discharge during the mission window."
+    ],
+    "constraints": {
+      "max_rounds": 3,
+      "max_claims_per_round": 3,
+      "max_tasks_per_round": 4
+    },
+    "source_policy": {
+      "sociologist": [
+        "gdelt-doc-search"
+      ],
+      "environmentalist": [
+        "open-meteo-flood-fetch"
+      ],
+      "historian": []
+    }
+  },
+  "tasks": [
+    {
+      "schema_version": "1.0.0",
+      "task_id": "task-sociologist-round-001-01",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "assigned_role": "sociologist",
+      "objective": "Collect public flood artifacts for Brisbane during the mission window.",
+      "status": "planned",
+      "depends_on": [],
+      "expected_output_kinds": [
+        "source-selection",
+        "claim",
+        "expert-report"
+      ],
+      "inputs": {
+        "mission_geometry": {
+          "type": "Point",
+          "latitude": -27.4698,
+          "longitude": 153.0251
+        },
+        "mission_window": {
+          "start_utc": "2026-03-03T00:00:00Z",
+          "end_utc": "2026-03-05T23:59:59Z"
+        },
+        "preferred_sources": [
+          "gdelt-doc-search"
+        ]
+      },
+      "notes": "Replay fixture."
+    },
+    {
+      "schema_version": "1.0.0",
+      "task_id": "task-environmentalist-round-001-01",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "assigned_role": "environmentalist",
+      "objective": "Collect hydrology observations for Brisbane during the mission window.",
+      "status": "planned",
+      "depends_on": [],
+      "expected_output_kinds": [
+        "source-selection",
+        "observation",
+        "expert-report"
+      ],
+      "inputs": {
+        "mission_geometry": {
+          "type": "Point",
+          "latitude": -27.4698,
+          "longitude": 153.0251
+        },
+        "mission_window": {
+          "start_utc": "2026-03-03T00:00:00Z",
+          "end_utc": "2026-03-05T23:59:59Z"
+        },
+        "preferred_sources": [
+          "open-meteo-flood-fetch"
+        ]
+      },
+      "notes": "Replay fixture."
+    }
+  ],
+  "claims": [
+    {
+      "schema_version": "1.0.0",
+      "claim_id": "claim-001",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "agent_role": "sociologist",
+      "claim_type": "flood",
+      "status": "candidate",
+      "summary": "Public reports say flood conditions intensified along the Brisbane River during the mission window.",
+      "statement": "Mission-window public discussion reports meaningful flooding along the Brisbane River.",
+      "priority": 1,
+      "needs_physical_validation": true,
+      "time_window": {
+        "start_utc": "2026-03-03T00:00:00Z",
+        "end_utc": "2026-03-05T23:59:59Z"
+      },
+      "place_scope": {
+        "label": "Brisbane River, Queensland, Australia",
+        "geometry": {
+          "type": "Point",
+          "latitude": -27.4698,
+          "longitude": 153.0251
+        }
+      },
+      "public_refs": [
+        {
+          "source_skill": "gdelt-doc-search",
+          "artifact_path": "runs/replay/raw/gdelt-doc-search.json",
+          "record_locator": "$.articles[0]",
+          "external_id": "gdelt-flood-001"
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "schema_version": "1.0.0",
+      "observation_id": "obs-001",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "agent_role": "environmentalist",
+      "source_skill": "open-meteo-flood-fetch",
+      "metric": "river_discharge",
+      "aggregation": "window-summary",
+      "value": 165.0,
+      "unit": "m3/s",
+      "statistics": {
+        "min": 110.0,
+        "max": 210.0,
+        "mean": 165.0,
+        "p95": 205.0
+      },
+      "time_window": {
+        "start_utc": "2026-03-03T00:00:00Z",
+        "end_utc": "2026-03-05T23:59:59Z"
+      },
+      "place_scope": {
+        "label": "Brisbane River, Queensland, Australia",
+        "geometry": {
+          "type": "Point",
+          "latitude": -27.4698,
+          "longitude": 153.0251
+        }
+      },
+      "quality_flags": [
+        "hydrology-model"
+      ],
+      "provenance": {
+        "source_skill": "open-meteo-flood-fetch",
+        "artifact_path": "runs/replay/raw/open-meteo-flood-fetch.json",
+        "record_locator": "$.records[0].daily.river_discharge[0]"
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "observation_id": "obs-002",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "agent_role": "environmentalist",
+      "source_skill": "open-meteo-flood-fetch",
+      "metric": "river_discharge_p75",
+      "aggregation": "window-summary",
+      "value": 182.0,
+      "unit": "m3/s",
+      "statistics": {
+        "min": 130.0,
+        "max": 230.0,
+        "mean": 182.0,
+        "p95": 225.0
+      },
+      "time_window": {
+        "start_utc": "2026-03-03T00:00:00Z",
+        "end_utc": "2026-03-05T23:59:59Z"
+      },
+      "place_scope": {
+        "label": "Brisbane River, Queensland, Australia",
+        "geometry": {
+          "type": "Point",
+          "latitude": -27.4698,
+          "longitude": 153.0251
+        }
+      },
+      "quality_flags": [
+        "hydrology-model"
+      ],
+      "provenance": {
+        "source_skill": "open-meteo-flood-fetch",
+        "artifact_path": "runs/replay/raw/open-meteo-flood-fetch.json",
+        "record_locator": "$.records[0].daily.river_discharge_p75[0]"
+      }
+    }
+  ],
+  "evidence_cards": [
+    {
+      "schema_version": "1.0.0",
+      "evidence_id": "evidence-001",
+      "run_id": "eval-flood-supported-complete",
+      "round_id": "round-001",
+      "claim_id": "claim-001",
+      "verdict": "supports",
+      "confidence": "high",
+      "summary": "Hydrology observations support the mission-window flood claim.",
+      "public_refs": [
+        {
+          "source_skill": "gdelt-doc-search",
+          "artifact_path": "runs/replay/raw/gdelt-doc-search.json",
+          "record_locator": "$.articles[0]"
+        }
+      ],
+      "observation_ids": [
+        "obs-001",
+        "obs-002"
+      ],
+      "gaps": []
+    }
+  ],
+  "fetch_statuses": [
+    {
+      "step_id": "step-sociologist-01-gdelt-doc-search",
+      "assigned_role": "sociologist",
+      "source_skill": "gdelt-doc-search",
+      "status": "completed"
+    },
+    {
+      "step_id": "step-environmentalist-01-open-meteo-flood-fetch",
+      "assigned_role": "environmentalist",
+      "source_skill": "open-meteo-flood-fetch",
+      "status": "completed"
+    }
+  ],
+  "expect": {
+    "decision": {
+      "moderator_status": "complete",
+      "next_round_required": false,
+      "evidence_sufficiency": "sufficient",
+      "missing_evidence_types": []
+    },
+    "context": {
+      "context_layer": "compact-v1",
+      "max_observations": 8,
+      "max_claims": 4
+    }
+  }
+}

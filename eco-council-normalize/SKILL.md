@@ -90,6 +90,7 @@ Public-signal normalization currently supports:
 Environment normalization currently supports:
 - `open-meteo-historical-fetch`
 - `open-meteo-air-quality-fetch`
+- `open-meteo-flood-fetch`
 - `nasa-firms-fire-fetch`
 - `openaq-data-fetch` API JSON and CSV/CSV.GZ artifacts
 

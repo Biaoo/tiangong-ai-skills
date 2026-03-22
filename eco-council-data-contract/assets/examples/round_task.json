@@ -8,6 +8,7 @@
   "status": "planned",
   "depends_on": [],
   "expected_output_kinds": [
+    "source-selection",
     "claim",
     "expert-report"
   ],

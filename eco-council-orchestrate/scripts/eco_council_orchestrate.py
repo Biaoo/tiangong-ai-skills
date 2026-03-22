@@ -32,6 +32,7 @@ SKILL_DIRS = {
     "regulationsgov-comment-detail-fetch": REPO_DIR / "regulationsgov-comment-detail-fetch",
     "open-meteo-air-quality-fetch": REPO_DIR / "open-meteo-air-quality-fetch",
     "open-meteo-historical-fetch": REPO_DIR / "open-meteo-historical-fetch",
+    "open-meteo-flood-fetch": REPO_DIR / "open-meteo-flood-fetch",
     "nasa-firms-fire-fetch": REPO_DIR / "nasa-firms-fire-fetch",
     "openaq-data-fetch": REPO_DIR / "openaq-data-fetch",
 }
@@ -45,6 +46,7 @@ FETCH_SCRIPT_PATHS = {
     "regulationsgov-comment-detail-fetch": SKILL_DIRS["regulationsgov-comment-detail-fetch"] / "scripts" / "regulationsgov_comment_detail_fetch.py",
     "open-meteo-air-quality-fetch": SKILL_DIRS["open-meteo-air-quality-fetch"] / "scripts" / "open_meteo_air_quality_fetch.py",
     "open-meteo-historical-fetch": SKILL_DIRS["open-meteo-historical-fetch"] / "scripts" / "open_meteo_historical_fetch.py",
+    "open-meteo-flood-fetch": SKILL_DIRS["open-meteo-flood-fetch"] / "scripts" / "open_meteo_flood_fetch.py",
     "nasa-firms-fire-fetch": SKILL_DIRS["nasa-firms-fire-fetch"] / "scripts" / "nasa_firms_fire_fetch.py",
 }
 
@@ -59,6 +61,7 @@ PUBLIC_SOURCES = (
 ENVIRONMENT_SOURCES = (
     "open-meteo-air-quality-fetch",
     "open-meteo-historical-fetch",
+    "open-meteo-flood-fetch",
     "nasa-firms-fire-fetch",
     "openaq-data-fetch",
 )
@@ -66,7 +69,7 @@ ROUND_ID_PATTERN = re.compile(r"^round-\d{3}$")
 ROUND_DIR_PATTERN = re.compile(r"^round_(\d{3})$")
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
-DEFAULT_SOURCE_ORDER = {
+SUPPORTED_SOURCES_BY_ROLE = {
     "sociologist": list(PUBLIC_SOURCES),
     "environmentalist": list(ENVIRONMENT_SOURCES),
 }
@@ -87,6 +90,10 @@ DEFAULT_OPEN_METEO_HIST_HOURLY_VARS = [
 DEFAULT_OPEN_METEO_HIST_DAILY_VARS = [
     "precipitation_sum",
     "et0_fao_evapotranspiration",
+]
+DEFAULT_OPEN_METEO_FLOOD_DAILY_VARS = [
+    "river_discharge",
+    "river_discharge_p75",
 ]
 DEFAULT_OPENAQ_PARAMETER_NAMES = [
     "pm25",
@@ -130,6 +137,10 @@ def maybe_text(value: Any) -> str:
     if value is None:
         return ""
     return normalize_space(str(value))
+
+
+def text_truthy(value: Any) -> bool:
+    return maybe_text(value).casefold() in {"1", "true", "yes", "on"}
 
 
 def truncate_text(value: str, limit: int) -> str:
@@ -259,6 +270,10 @@ def fetch_prompt_path(run_dir: Path, round_id: str, role: str) -> Path:
     return role_derived_dir(run_dir, round_id, role) / "openclaw_fetch_prompt.txt"
 
 
+def source_selection_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "source_selection.json"
+
+
 def reporting_handoff_path(run_dir: Path, round_id: str) -> Path:
     return moderator_derived_dir(run_dir, round_id) / "openclaw_reporting_handoff.json"
 
@@ -319,6 +334,13 @@ def load_tasks(run_dir: Path, round_id: str) -> list[dict[str, Any]]:
     return ensure_object_list(read_json(tasks_path), f"{tasks_path}")
 
 
+def load_source_selection(run_dir: Path, round_id: str, role: str) -> dict[str, Any] | None:
+    path = source_selection_path(run_dir, round_id, role)
+    if not path.exists():
+        return None
+    return ensure_object(read_json(path), f"{path}")
+
+
 def tasks_for_role(tasks: list[dict[str, Any]], role: str) -> list[dict[str, Any]]:
     return [task for task in tasks if maybe_text(task.get("assigned_role")) == role]
 
@@ -339,10 +361,10 @@ def mission_region(mission: dict[str, Any]) -> dict[str, Any]:
 def source_policy_for_role(mission: dict[str, Any], role: str) -> list[str]:
     policy = mission.get("source_policy")
     if not isinstance(policy, dict):
-        return list(DEFAULT_SOURCE_ORDER.get(role, []))
+        return []
     selected = policy.get(role)
     if not isinstance(selected, list):
-        return list(DEFAULT_SOURCE_ORDER.get(role, []))
+        return []
     return [maybe_text(item) for item in selected if maybe_text(item)]
 
 
@@ -383,18 +405,48 @@ def task_objective_text(tasks: list[dict[str, Any]]) -> str:
 
 
 def role_supported_sources(role: str) -> list[str]:
-    return list(DEFAULT_SOURCE_ORDER.get(role, []))
+    return list(SUPPORTED_SOURCES_BY_ROLE.get(role, []))
+
+def role_required_sources(tasks: list[dict[str, Any]]) -> list[str]:
+    return merged_task_string_list(tasks, "required_sources")
 
 
-def role_selected_sources(*, mission: dict[str, Any], tasks: list[dict[str, Any]], role: str) -> list[str]:
-    preferred = merged_task_string_list(tasks, "preferred_sources")
+def source_selection_selected_sources(source_selection: dict[str, Any] | None) -> list[str]:
+    if not isinstance(source_selection, dict):
+        return []
+    if maybe_text(source_selection.get("status")) == "pending":
+        return []
+    value = source_selection.get("selected_sources")
+    if not isinstance(value, list):
+        return []
+    return unique_strings([maybe_text(item) for item in value if maybe_text(item)])
+
+
+def role_selected_sources(
+    *,
+    mission: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    role: str,
+    source_selection: dict[str, Any] | None,
+) -> list[str]:
     allowed = source_policy_for_role(mission, role)
-    if not preferred:
-        return [source for source in allowed if source in role_supported_sources(role)]
-    filtered = [source for source in preferred if source in role_supported_sources(role)]
-    if allowed:
-        filtered = [source for source in filtered if source in allowed]
-    return unique_strings(filtered)
+    supported = role_supported_sources(role)
+    allowed_lookup = {source.casefold() for source in allowed}
+    supported_lookup = {source.casefold() for source in supported}
+    selected_lookup = {
+        source.casefold()
+        for source in source_selection_selected_sources(source_selection) + role_required_sources(tasks)
+        if source.casefold() in supported_lookup
+    }
+    if not selected_lookup:
+        return []
+    if not allowed_lookup:
+        selected = sorted(selected_lookup)
+        raise ValueError(f"Role {role} selected sources {selected}, but mission.source_policy.{role} is empty.")
+    invalid = [source for source in supported if source.casefold() in selected_lookup and source.casefold() not in allowed_lookup]
+    if invalid:
+        raise ValueError(f"Role {role} selected unsupported or disallowed sources: {invalid}.")
+    return [source for source in supported if source.casefold() in selected_lookup and source.casefold() in allowed_lookup]
 
 
 def build_plain_query(*, mission: dict[str, Any], tasks: list[dict[str, Any]]) -> str:
@@ -597,32 +649,24 @@ def build_sociologist_steps(
     round_id: str,
     mission: dict[str, Any],
     tasks: list[dict[str, Any]],
+    source_selection: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     role = "sociologist"
     role_tasks = tasks_for_role(tasks, role)
     if not role_tasks:
         return []
-    selected = role_selected_sources(mission=mission, tasks=role_tasks, role=role)
+    selected = role_selected_sources(mission=mission, tasks=role_tasks, role=role, source_selection=source_selection)
     if not selected:
         return []
     task_ids = step_task_ids(role_tasks)
     window = window_from_task_or_mission(mission=mission, tasks=role_tasks)
     query_text = build_plain_query(mission=mission, tasks=role_tasks)
     gdelt_query = build_gdelt_query(mission=mission, tasks=role_tasks)
-    include_regs = regs_task_enabled(role_tasks)
-    sources = list(selected)
-    if "youtube-comments-fetch" in sources and "youtube-video-search" not in sources and not merged_task_scalar(role_tasks, "youtube_video_ids_file"):
-        sources.insert(0, "youtube-video-search")
-    if "regulationsgov-comment-detail-fetch" in sources and "regulationsgov-comments-fetch" not in sources and not merged_task_scalar(role_tasks, "comment_ids_file"):
-        sources.insert(0, "regulationsgov-comments-fetch")
-
     steps: list[dict[str, Any]] = []
     counter = 0
     prior_step_ids: dict[str, str] = {}
-    for source_skill in sources:
+    for source_skill in selected:
         if source_skill not in PUBLIC_SOURCES:
-            continue
-        if source_skill.startswith("regulationsgov") and not include_regs and source_skill not in merged_task_string_list(role_tasks, "preferred_sources"):
             continue
         counter += 1
         step_id = new_step_id(role, source_skill, counter)
@@ -839,13 +883,14 @@ def build_environmentalist_steps(
     round_id: str,
     mission: dict[str, Any],
     tasks: list[dict[str, Any]],
+    source_selection: dict[str, Any] | None,
     firms_point_padding_deg: float,
 ) -> list[dict[str, Any]]:
     role = "environmentalist"
     role_tasks = tasks_for_role(tasks, role)
     if not role_tasks:
         return []
-    selected = role_selected_sources(mission=mission, tasks=role_tasks, role=role)
+    selected = role_selected_sources(mission=mission, tasks=role_tasks, role=role, source_selection=source_selection)
     if not selected:
         return []
     task_ids = step_task_ids(role_tasks)
@@ -933,6 +978,39 @@ def build_environmentalist_steps(
             )
             notes.append("Collect meteorology and soil variables for physical verification.")
             command = shell_command(argv, env_file=env_file)
+        elif source_skill == "open-meteo-flood-fetch":
+            argv = [
+                "python3",
+                str(FETCH_SCRIPT_PATHS[source_skill]),
+                "fetch",
+            ]
+            for location in location_values:
+                argv.extend(["--location", location])
+            argv.extend(
+                [
+                    "--start-date",
+                    to_date_text(window["start_utc"]),
+                    "--end-date",
+                    to_date_text(window["end_utc"]),
+                ]
+            )
+            for metric in merged_task_string_list(role_tasks, "open_meteo_flood_daily_vars") or DEFAULT_OPEN_METEO_FLOOD_DAILY_VARS:
+                argv.extend(["--daily-var", metric])
+            if text_truthy(merged_task_scalar(role_tasks, "open_meteo_flood_ensemble")):
+                argv.append("--ensemble")
+            argv.extend(
+                [
+                    "--cell-selection",
+                    merged_task_scalar(role_tasks, "open_meteo_flood_cell_selection") or "nearest",
+                    "--timezone",
+                    merged_task_scalar(role_tasks, "open_meteo_flood_timezone") or "GMT",
+                    "--output",
+                    str(artifact_path),
+                    "--pretty",
+                ]
+            )
+            notes.append("Collect hydrology and flood-background discharge signals for the mission geometry.")
+            command = shell_command(argv, env_file=env_file)
         elif source_skill == "nasa-firms-fire-fetch":
             argv = [
                 "python3",
@@ -1012,6 +1090,8 @@ def build_fetch_plan(
     tasks = load_tasks(run_dir, round_id)
     sociologist_tasks = tasks_for_role(tasks, "sociologist")
     environmentalist_tasks = tasks_for_role(tasks, "environmentalist")
+    sociologist_selection = load_source_selection(run_dir, round_id, "sociologist")
+    environmentalist_selection = load_source_selection(run_dir, round_id, "environmentalist")
 
     steps: list[dict[str, Any]] = []
     steps.extend(
@@ -1020,6 +1100,7 @@ def build_fetch_plan(
             round_id=round_id,
             mission=mission,
             tasks=tasks,
+            source_selection=sociologist_selection,
         )
     )
     steps.extend(
@@ -1028,6 +1109,7 @@ def build_fetch_plan(
             round_id=round_id,
             mission=mission,
             tasks=tasks,
+            source_selection=environmentalist_selection,
             firms_point_padding_deg=firms_point_padding_deg,
         )
     )
@@ -1047,12 +1129,30 @@ def build_fetch_plan(
             "sociologist": {
                 "task_ids": step_task_ids(sociologist_tasks),
                 "objective": task_objective_text(sociologist_tasks),
-                "source_policy": role_selected_sources(mission=mission, tasks=sociologist_tasks, role="sociologist"),
+                "allowed_sources": source_policy_for_role(mission, "sociologist"),
+                "required_sources": role_required_sources(sociologist_tasks),
+                "source_selection_path": str(source_selection_path(run_dir, round_id, "sociologist")),
+                "source_selection_status": maybe_text((sociologist_selection or {}).get("status")),
+                "selected_sources": role_selected_sources(
+                    mission=mission,
+                    tasks=sociologist_tasks,
+                    role="sociologist",
+                    source_selection=sociologist_selection,
+                ),
             },
             "environmentalist": {
                 "task_ids": step_task_ids(environmentalist_tasks),
                 "objective": task_objective_text(environmentalist_tasks),
-                "source_policy": role_selected_sources(mission=mission, tasks=environmentalist_tasks, role="environmentalist"),
+                "allowed_sources": source_policy_for_role(mission, "environmentalist"),
+                "required_sources": role_required_sources(environmentalist_tasks),
+                "source_selection_path": str(source_selection_path(run_dir, round_id, "environmentalist")),
+                "source_selection_status": maybe_text((environmentalist_selection or {}).get("status")),
+                "selected_sources": role_selected_sources(
+                    mission=mission,
+                    tasks=environmentalist_tasks,
+                    role="environmentalist",
+                    source_selection=environmentalist_selection,
+                ),
             },
         },
         "steps": steps,
@@ -1083,8 +1183,9 @@ def render_moderator_task_review_prompt(*, run_dir: Path, round_id: str) -> Path
         "1. Keep the file as a JSON list of valid round-task objects.",
         "2. Keep run_id and round_id unchanged.",
         "3. Use only moderator-owned task assignment; do not write claims, observations, evidence cards, or reports here.",
-        "4. Prefer source skills already allowed in mission.source_policy and task.inputs.preferred_sources.",
-        "5. Keep objectives concrete enough that sociologist and environmentalist can fetch raw artifacts deterministically.",
+        "4. Keep task.inputs.preferred_sources as guidance only; they do not auto-run any source.",
+        "5. Use task.inputs.required_sources only for sources that must be forced even if the expert would otherwise skip them.",
+        "6. Keep objectives concrete enough that sociologist and environmentalist can choose and fetch raw artifacts deterministically.",
         "",
         "After editing, validate with:",
         validate_command,

@@ -37,7 +37,8 @@
       "openaq-data-fetch",
       "nasa-firms-fire-fetch",
       "open-meteo-air-quality-fetch",
-      "open-meteo-historical-fetch"
+      "open-meteo-historical-fetch",
+      "open-meteo-flood-fetch"
     ],
     "historian": []
   }

@@ -10,7 +10,15 @@
   "schema_version": "1.0.0",
   "generated_at_utc": "2026-03-21T08:00:00Z",
   "run": {},
-  "roles": {},
+  "roles": {
+    "sociologist": {
+      "allowed_sources": [],
+      "required_sources": [],
+      "source_selection_path": "",
+      "source_selection_status": "",
+      "selected_sources": []
+    }
+  },
   "steps": []
 }
 ```
@@ -37,9 +45,11 @@ Each step includes:
 
 - `command` is the exact shell snippet the expert agent or local runner should execute.
 - `artifact_path` is the contract path that downstream normalization expects.
+- `roles.<role>.selected_sources` is the only set that may execute automatically, plus any explicit task-level `required_sources`.
+- `steps` may be an empty list when experts decided no source is needed for the round.
 - `depends_on` is used for chained steps such as:
-  - `youtube-video-search` -> `youtube-comments-fetch`
-  - `regulationsgov-comments-fetch` -> `regulationsgov-comment-detail-fetch`
+  - `youtube-video-search` -> `youtube-comments-fetch` when both were explicitly selected
+  - `regulationsgov-comments-fetch` -> `regulationsgov-comment-detail-fetch` when both were explicitly selected
 - `normalizer_input` can be passed directly to `$eco-council-normalize --input`.
 
 ## Editing Rule

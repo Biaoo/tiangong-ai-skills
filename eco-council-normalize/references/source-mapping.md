@@ -56,6 +56,12 @@
 - Treated as modeled background air-quality context.
 - Quality flags include `modeled-background`.
 
+### `open-meteo-flood-fetch`
+
+- Treated as modeled hydrology or flood-background context.
+- Quality flags include `hydrology-model`.
+- River-discharge metrics can support or contradict `flood` claims directly.
+
 ### `nasa-firms-fire-fetch`
 
 - Writes one staging row per fire detection.

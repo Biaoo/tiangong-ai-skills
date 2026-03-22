@@ -1,6 +1,6 @@
 ---
 name: eco-council-supervisor
-description: Run an eco-council workflow through one stage-gated local supervisor and maintain a local SQLite case library of historical eco-council records. Use when you want to bootstrap a run from mission JSON, provision fixed OpenClaw moderator/sociologist/environmentalist agents, require human approval before each shell stage, import agent JSON replies safely, advance rounds with minimal manual freedom, render a human-readable meeting record from the run directory, or archive completed runs into a queryable local history database.
+description: Run an eco-council workflow through one stage-gated local supervisor and maintain a local SQLite case library of historical eco-council records. Use when you want to bootstrap a run from mission JSON, provision fixed OpenClaw moderator/sociologist/environmentalist agents, require audited expert source-selection before any fetch stage, import agent JSON replies safely, advance rounds with minimal manual freedom, render a human-readable meeting record from the run directory, or archive completed runs into a queryable local history database.
 ---
 
 # Eco Council Supervisor
@@ -12,12 +12,15 @@ Use this skill when the eco-council flow should be driven by one deterministic l
 1. Initialize one run with `init-run`.
    - Optionally attach one local case-library SQLite database so the moderator receives compact similar-case context automatically.
 2. Optionally create three isolated OpenClaw agents with `provision-openclaw-agents`.
-3. Follow `RUN_DIR/supervisor/CURRENT_STEP.txt`.
-4. At each shell stage, use `continue-run` and approve the step.
-5. At each agent stage, import returned JSON with:
-   - `import-task-review`
-   - `import-report`
-   - `import-decision`
+3. Let the moderator review or revise `tasks.json`.
+4. Let the sociologist and environmentalist each return one audited `source-selection` object.
+5. Follow `RUN_DIR/supervisor/CURRENT_STEP.txt`.
+6. At each shell stage, use `continue-run` and approve the step.
+7. At each agent stage, import returned JSON with:
+  - `import-task-review`
+  - `import-source-selection`
+  - `import-report`
+  - `import-decision`
 
 ## Command Surface
 
@@ -50,7 +53,9 @@ Use this skill when the eco-council flow should be driven by one deterministic l
   - Runs exactly one approved shell stage.
 - `python3 scripts/eco_council_supervisor.py run-agent-step --run-dir ... --pretty`
   - Sends the current moderator/expert turn to OpenClaw, captures JSON, validates it, and imports it automatically.
+  - Supports moderator task review, expert source selection, expert report drafting, and moderator decision drafting.
 - `python3 scripts/eco_council_supervisor.py import-task-review ...`
+- `python3 scripts/eco_council_supervisor.py import-source-selection ...`
 - `python3 scripts/eco_council_supervisor.py import-report ...`
 - `python3 scripts/eco_council_supervisor.py import-decision ...`
 
@@ -58,6 +63,7 @@ Use this skill when the eco-council flow should be driven by one deterministic l
 
 - Keep shell execution inside the supervisor.
 - Keep agents limited to JSON-only outputs.
+- No source runs unless an expert selected it in `source_selection.json` or a task explicitly forces it through `task.inputs.required_sources`.
 - Treat `RUN_DIR/supervisor/CURRENT_STEP.txt` as the human checklist.
 - If OpenClaw cannot load local repo skills directly, still use the generated prompt files as the source of truth.
 - Treat the case-library SQLite database as historical record storage, not as a replacement for canonical per-run JSON artifacts.

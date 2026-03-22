@@ -128,9 +128,17 @@ CLAIM_METRIC_RULES = {
         "support": {
             "precipitation_sum": 20.0,
             "precipitation": 10.0,
+            "river_discharge": 100.0,
+            "river_discharge_mean": 100.0,
+            "river_discharge_max": 120.0,
+            "river_discharge_p75": 100.0,
         },
         "contradict": {
             "precipitation_sum": 1.0,
+            "river_discharge": 20.0,
+            "river_discharge_mean": 20.0,
+            "river_discharge_max": 25.0,
+            "river_discharge_p75": 20.0,
         },
     },
     "heat": {
@@ -1457,7 +1465,13 @@ def iter_open_meteo_signals(
                             latitude=latitude,
                             longitude=longitude,
                             bbox=None,
-                            quality_flags=["modeled-background"] if source_skill == "open-meteo-air-quality-fetch" else ["reanalysis-or-model"],
+                            quality_flags=(
+                                ["modeled-background"]
+                                if source_skill == "open-meteo-air-quality-fetch"
+                                else ["hydrology-model"]
+                                if source_skill == "open-meteo-flood-fetch"
+                                else ["reanalysis-or-model"]
+                            ),
                             metadata={
                                 "section": section_name,
                                 "timezone": maybe_text(record.get("timezone")),
@@ -1667,7 +1681,7 @@ def normalize_environment_source(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     signals: list[dict[str, Any]] = []
     extra_observations: list[dict[str, Any]] = []
-    if source_skill in {"open-meteo-historical-fetch", "open-meteo-air-quality-fetch"}:
+    if source_skill in {"open-meteo-historical-fetch", "open-meteo-air-quality-fetch", "open-meteo-flood-fetch"}:
         sha256_value = file_sha256(path)
         payload = parse_path_payload(path)
         signals = iter_open_meteo_signals(

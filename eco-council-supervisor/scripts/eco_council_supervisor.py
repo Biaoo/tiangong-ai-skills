@@ -26,9 +26,11 @@ ROUND_ID_PATTERN = re.compile(r"^round-\d{3}$")
 ROUND_DIR_PATTERN = re.compile(r"^round_(\d{3})$")
 AGENT_ID_SAFE = re.compile(r"[^a-z0-9-]+")
 ROLES = ("moderator", "sociologist", "environmentalist")
+SOURCE_SELECTION_ROLES = ("sociologist", "environmentalist")
 REPORT_ROLES = ("sociologist", "environmentalist")
 
 STAGE_AWAITING_TASK_REVIEW = "awaiting-moderator-task-review"
+STAGE_AWAITING_SOURCE_SELECTION = "awaiting-source-selection"
 STAGE_READY_PREPARE = "ready-to-prepare-round"
 STAGE_READY_FETCH = "ready-to-execute-fetch-plan"
 STAGE_READY_DATA_PLANE = "ready-to-run-data-plane"
@@ -139,6 +141,18 @@ def fetch_plan_path(run_dir: Path, round_id: str) -> Path:
 
 def fetch_execution_path(run_dir: Path, round_id: str) -> Path:
     return round_dir(run_dir, round_id) / "moderator" / "derived" / "fetch_execution.json"
+
+
+def source_selection_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "source_selection.json"
+
+
+def source_selection_prompt_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "derived" / "openclaw_source_selection_prompt.txt"
+
+
+def source_selection_packet_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "derived" / "source_selection_packet.json"
 
 
 def report_draft_path(run_dir: Path, round_id: str, role: str) -> Path:
@@ -476,12 +490,13 @@ def session_prompt_text(*, role: str, agent_id: str) -> str:
     else:
         rules = [
             "1. Stay in role for the full run.",
-            "2. Only work on the report packet or prompt explicitly requested by the supervisor.",
-            "3. Return only one JSON object shaped like expert-report.",
-            "4. Never add markdown, prose, or code fences.",
-            "5. Do not invent new raw data fetch results in the report stage.",
-            "6. If a referenced local skill is unavailable in this OpenClaw instance, follow the referenced file as the source of truth anyway.",
-            "7. `recommended_next_actions` must be a list of objects with `assigned_role`, `objective`, and `reason`; use [] when there are no recommendations.",
+            "2. Only work on the source-selection packet or report packet explicitly requested by the supervisor.",
+            "3. For source-selection turns, return only one JSON object shaped like source-selection.",
+            "4. For report turns, return only one JSON object shaped like expert-report.",
+            "5. Never add markdown, prose, or code fences.",
+            "6. Do not invent new raw data fetch results in the report stage.",
+            "7. If a referenced local skill is unavailable in this OpenClaw instance, follow the referenced file as the source of truth anyway.",
+            "8. `recommended_next_actions` must be a list of objects with `assigned_role`, `objective`, and `reason`; use [] when there are no recommendations.",
         ]
     return "\n".join(header + rules)
 
@@ -510,6 +525,64 @@ def role_prompt_outbox_text(*, role: str, round_id: str, prompt_path: Path, hist
     else:
         lines.insert(0, f"Use your {role} session rules.")
     return "\n".join(lines)
+
+
+def build_source_selection_packet(run_dir: Path, round_id: str, role: str) -> Path:
+    mission_payload = read_json(mission_path(run_dir))
+    if not isinstance(mission_payload, dict):
+        raise ValueError(f"Mission payload is not a JSON object: {mission_path(run_dir)}")
+    task_payload = read_json(tasks_path(run_dir, round_id))
+    tasks = task_payload if isinstance(task_payload, list) else []
+    role_tasks = [item for item in tasks_for_role(tasks, role) if isinstance(item, dict)]
+    packet = {
+        "schema_version": SCHEMA_VERSION,
+        "packet_kind": "eco-council-source-selection-packet",
+        "run_id": maybe_text(mission_payload.get("run_id")),
+        "round_id": round_id,
+        "agent_role": role,
+        "mission": mission_payload,
+        "tasks": role_tasks,
+        "allowed_sources": source_policy_for_role(mission_payload, role),
+        "current_source_selection": load_json_if_exists(source_selection_path(run_dir, round_id, role)),
+    }
+    target = source_selection_packet_path(run_dir, round_id, role)
+    write_json(target, packet, pretty=True)
+    return target
+
+
+def render_source_selection_prompt(run_dir: Path, round_id: str, role: str) -> Path:
+    packet_path = build_source_selection_packet(run_dir, round_id, role)
+    target_path = source_selection_path(run_dir, round_id, role)
+    validate_command = (
+        "python3 "
+        + str(CONTRACT_SCRIPT)
+        + " validate --kind source-selection --input "
+        + str(target_path)
+        + " --pretty"
+    )
+    lines = [
+        "Use $eco-council-data-contract.",
+        f"Open source-selection packet at: {packet_path}",
+        f"Write the canonical source-selection object at: {target_path}",
+        "",
+        "Review whether your role needs any raw-data fetch sources before prepare-round.",
+        "Requirements:",
+        "1. Return exactly one valid source-selection JSON object.",
+        "2. Keep run_id, round_id, agent_role, task_ids, and allowed_sources aligned with the packet unless the packet itself is stale.",
+        "3. selected_sources must be a subset of allowed_sources.",
+        "4. Include one source_decisions entry for every allowed source with selected=true or selected=false and one concrete reason.",
+        "5. If no raw fetch is needed, keep selected_sources as [] and explain why in summary.",
+        "6. Treat task.inputs.preferred_sources only as hints. They do not auto-run.",
+        "7. Treat task.inputs.required_sources as mandatory forced sources unless the moderator changes tasks upstream.",
+        "",
+        "After editing, validate with:",
+        validate_command,
+        "",
+        "Return only the final JSON object.",
+    ]
+    output_path = source_selection_prompt_path(run_dir, round_id, role)
+    write_text(output_path, "\n".join(lines))
+    return output_path
 
 
 def build_current_step_text(run_dir: Path, state: dict[str, Any]) -> str:
@@ -543,6 +616,45 @@ def build_current_step_text(run_dir: Path, state: dict[str, Any]) -> str:
                 + " import-task-review --run-dir "
                 + str(run_dir)
                 + " --input /path/to/moderator_tasks.json --pretty",
+            ]
+        )
+    elif stage == STAGE_AWAITING_SOURCE_SELECTION:
+        lines.extend(
+            [
+                "Preferred: run the two expert source-selection turns automatically, one by one:",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --role sociologist --pretty",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " run-agent-step --run-dir "
+                + str(run_dir)
+                + " --role environmentalist --pretty",
+                "",
+                "Manual fallback:",
+                "1. Open the sociologist session prompt:",
+                str(session_prompt_path(run_dir, "sociologist")),
+                "",
+                "2. Send this source-selection prompt to the sociologist agent:",
+                str(outbox_message_path(run_dir, "sociologist_source_selection")),
+                "",
+                "3. Import the returned JSON:",
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " import-source-selection --run-dir "
+                + str(run_dir)
+                + " --role sociologist --input /path/to/sociologist_source_selection.json --pretty",
+                "",
+                "4. Repeat the same pattern for the environmentalist:",
+                str(session_prompt_path(run_dir, "environmentalist")),
+                str(outbox_message_path(run_dir, "environmentalist_source_selection")),
+                "python3 "
+                + str(SCRIPT_DIR / "eco_council_supervisor.py")
+                + " import-source-selection --run-dir "
+                + str(run_dir)
+                + " --role environmentalist --input /path/to/environmentalist_source_selection.json --pretty",
             ]
         )
     elif stage == STAGE_READY_PREPARE:
@@ -691,7 +803,14 @@ def refresh_supervisor_files(run_dir: Path, state: dict[str, Any]) -> None:
 
     outbox_dir = supervisor_outbox_dir(run_dir)
     outbox_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("moderator_task_review", "sociologist_report", "environmentalist_report", "moderator_decision"):
+    for name in (
+        "moderator_task_review",
+        "sociologist_source_selection",
+        "environmentalist_source_selection",
+        "sociologist_report",
+        "environmentalist_report",
+        "moderator_decision",
+    ):
         path = outbox_message_path(run_dir, name)
         if path.exists():
             path.unlink()
@@ -707,6 +826,17 @@ def refresh_supervisor_files(run_dir: Path, state: dict[str, Any]) -> None:
                 history_path=history_path,
             ),
         )
+    if stage == STAGE_AWAITING_SOURCE_SELECTION:
+        for role in SOURCE_SELECTION_ROLES:
+            prompt_path = render_source_selection_prompt(run_dir, current_round_id, role)
+            write_text(
+                outbox_message_path(run_dir, f"{role}_source_selection"),
+                role_prompt_outbox_text(
+                    role=role,
+                    round_id=current_round_id,
+                    prompt_path=prompt_path,
+                ),
+            )
     if stage == STAGE_AWAITING_REPORTS:
         for role in REPORT_ROLES:
             write_text(
@@ -741,6 +871,7 @@ def build_state_payload(*, run_dir: Path, round_id: str, agent_prefix: str) -> d
         "fetch_execution": "supervisor-local-shell",
         "imports": {
             "task_review_received": False,
+            "source_selection_roles_received": [],
             "report_roles_received": [],
             "decision_received": False,
         },
@@ -770,6 +901,7 @@ def build_status_payload(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]
     stage = maybe_text(state.get("stage"))
     stage_outboxes = {
         STAGE_AWAITING_TASK_REVIEW: ("moderator_task_review",),
+        STAGE_AWAITING_SOURCE_SELECTION: ("sociologist_source_selection", "environmentalist_source_selection"),
         STAGE_AWAITING_REPORTS: ("sociologist_report", "environmentalist_report"),
         STAGE_AWAITING_DECISION: ("moderator_decision",),
     }.get(stage, ())
@@ -791,12 +923,27 @@ def build_status_payload(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]
         "fetch_execution": maybe_text(state.get("fetch_execution")),
         "imports": {
             "task_review_received": bool(imports.get("task_review_received")),
+            "source_selection_roles_received": sorted(
+                {
+                    maybe_text(role)
+                    for role in imports.get("source_selection_roles_received", [])
+                    if maybe_text(role)
+                }
+            ),
             "report_roles_received": sorted(
                 {maybe_text(role) for role in imports.get("report_roles_received", []) if maybe_text(role)}
             ),
             "decision_received": bool(imports.get("decision_received")),
         },
         "task_review_prompt_path": str(task_review_prompt_path(run_dir, round_id)),
+        "source_selection_paths": {
+            role: str(source_selection_path(run_dir, round_id, role))
+            for role in SOURCE_SELECTION_ROLES
+        },
+        "source_selection_prompt_paths": {
+            role: str(source_selection_prompt_path(run_dir, round_id, role))
+            for role in SOURCE_SELECTION_ROLES
+        },
         "fetch_plan_path": str(fetch_plan_path(run_dir, round_id)),
         "session_prompt_paths": session_paths,
         "outbox_paths": outbox_paths,
@@ -815,6 +962,35 @@ def maybe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def unique_strings(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = maybe_text(value)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+    return output
+
+
+def source_policy_for_role(mission: dict[str, Any], role: str) -> list[str]:
+    policy = mission.get("source_policy")
+    if not isinstance(policy, dict):
+        return []
+    selected = policy.get(role)
+    if not isinstance(selected, list):
+        return []
+    return unique_strings([maybe_text(item) for item in selected if maybe_text(item)])
+
+
+def tasks_for_role(tasks: list[dict[str, Any]], role: str) -> list[dict[str, Any]]:
+    return [task for task in tasks if maybe_text(task.get("assigned_role")) == role]
 
 
 def count_json_list(path: Path) -> int:
@@ -840,6 +1016,7 @@ def role_label_zh(role: str) -> str:
 def stage_label_zh(stage: str) -> str:
     return {
         STAGE_AWAITING_TASK_REVIEW: "等待议长复审任务",
+        STAGE_AWAITING_SOURCE_SELECTION: "等待专家选择数据源",
         STAGE_READY_PREPARE: "等待生成本轮抓取计划",
         STAGE_READY_FETCH: "等待执行抓取计划",
         STAGE_READY_DATA_PLANE: "等待归一化与报告草稿生成",
@@ -929,6 +1106,11 @@ def recommended_commands_for_stage(run_dir: Path, state: dict[str, Any]) -> list
     current_run = str(run_dir)
     if stage == STAGE_AWAITING_TASK_REVIEW:
         return [f"{script} run-agent-step --run-dir {current_run} --role moderator --yes --pretty"]
+    if stage == STAGE_AWAITING_SOURCE_SELECTION:
+        return [
+            f"{script} run-agent-step --run-dir {current_run} --role sociologist --yes --pretty",
+            f"{script} run-agent-step --run-dir {current_run} --role environmentalist --yes --pretty",
+        ]
     if stage in {STAGE_READY_PREPARE, STAGE_READY_FETCH, STAGE_READY_DATA_PLANE, STAGE_READY_PROMOTE, STAGE_READY_ADVANCE}:
         return [f"{script} continue-run --run-dir {current_run} --yes --pretty"]
     if stage == STAGE_AWAITING_REPORTS:
@@ -952,6 +1134,10 @@ def collect_round_summary(run_dir: Path, state: dict[str, Any], round_id: str) -
     fetch_statuses = fetch.get("statuses") if isinstance(fetch.get("statuses"), list) else []
     decision_payload = load_json_if_exists(decision_target_path(run_dir, round_id))
     decision = decision_payload if isinstance(decision_payload, dict) else None
+    source_selections: dict[str, dict[str, Any] | None] = {}
+    for role in SOURCE_SELECTION_ROLES:
+        selection_payload = load_json_if_exists(source_selection_path(run_dir, round_id, role))
+        source_selections[role] = selection_payload if isinstance(selection_payload, dict) else None
     reports: dict[str, dict[str, Any] | None] = {}
     for role in REPORT_ROLES:
         report_payload = load_json_if_exists(report_target_path(run_dir, round_id, role))
@@ -985,14 +1171,34 @@ def collect_round_summary(run_dir: Path, state: dict[str, Any], round_id: str) -
             "public_signal_count": count_jsonl_records(public_signals_path(run_dir, round_id)),
             "environment_signal_count": count_jsonl_records(environment_signals_path(run_dir, round_id)),
         },
+        "source_selections": source_selections,
         "reports": reports,
         "decision": decision,
     }
 
 
+def source_selection_state(summary: dict[str, Any]) -> tuple[bool, int]:
+    selections = summary.get("source_selections", {}) if isinstance(summary.get("source_selections"), dict) else {}
+    all_complete = True
+    selected_count = 0
+    for role in SOURCE_SELECTION_ROLES:
+        payload = selections.get(role)
+        if not isinstance(payload, dict):
+            all_complete = False
+            continue
+        status = maybe_text(payload.get("status"))
+        if status not in {"complete", "blocked"}:
+            all_complete = False
+        selected = payload.get("selected_sources")
+        if isinstance(selected, list):
+            selected_count += len([item for item in selected if maybe_text(item)])
+    return all_complete, selected_count
+
+
 def build_current_issues_zh(round_summaries: list[dict[str, Any]], state: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     current_round_id = maybe_text(state.get("current_round_id"))
+    current_stage = maybe_text(state.get("stage"))
     latest_decision_round = first_nonempty(
         [summary["round_id"] for summary in reversed(round_summaries) if isinstance(summary.get("decision"), dict)]
     )
@@ -1016,8 +1222,21 @@ def build_current_issues_zh(round_summaries: list[dict[str, Any]], state: dict[s
             )
 
     current_summary = next((summary for summary in round_summaries if summary["round_id"] == current_round_id), None)
-    if isinstance(current_summary, dict) and maybe_int(current_summary.get("fetch", {}).get("step_count")) == 0:
-        issues.append(f"{current_round_id} 当前停在“{current_summary['status_label']}”，还没有开始本轮抓取。")
+    current_stage_allows_fetch = current_stage in {
+        STAGE_READY_FETCH,
+        STAGE_READY_DATA_PLANE,
+        STAGE_AWAITING_REPORTS,
+        STAGE_AWAITING_DECISION,
+        STAGE_READY_PROMOTE,
+        STAGE_READY_ADVANCE,
+        STAGE_COMPLETED,
+    }
+    if isinstance(current_summary, dict) and maybe_int(current_summary.get("fetch", {}).get("step_count")) == 0 and current_stage_allows_fetch:
+        selections_complete, selected_count = source_selection_state(current_summary)
+        if selections_complete and selected_count == 0:
+            pass
+        else:
+            issues.append(f"{current_round_id} 当前停在“{current_summary['status_label']}”，还没有开始本轮抓取。")
 
     if not issues:
         issues.append("当前未检测到结构性阻塞，但仍需按阶段继续执行。")
@@ -1056,6 +1275,7 @@ def render_run_summary_markdown(
         if lang == "en":
             return {
                 STAGE_AWAITING_TASK_REVIEW: "Waiting for moderator task review",
+                STAGE_AWAITING_SOURCE_SELECTION: "Waiting for expert source selection",
                 STAGE_READY_PREPARE: "Waiting to prepare the round fetch plan",
                 STAGE_READY_FETCH: "Waiting to execute the fetch plan",
                 STAGE_READY_DATA_PLANE: "Waiting to run normalization and report draft generation",
@@ -1139,10 +1359,21 @@ def render_run_summary_markdown(
                     f"{summary['round_id']} completed {maybe_int(fetch.get('completed_count'))} fetch steps, but the shared layer still has claims=0 and evidence_cards=0."
                 )
         current_summary = next((summary for summary in round_summaries if summary["round_id"] == current_round_id), None)
-        if isinstance(current_summary, dict) and maybe_int(current_summary.get("fetch", {}).get("step_count")) == 0:
-            issues.append(
-                f"{current_round_id} is currently at '{round_status_label(current_summary)}' and has not started round-level fetching yet."
-            )
+        current_stage_allows_fetch = current_stage in {
+            STAGE_READY_FETCH,
+            STAGE_READY_DATA_PLANE,
+            STAGE_AWAITING_REPORTS,
+            STAGE_AWAITING_DECISION,
+            STAGE_READY_PROMOTE,
+            STAGE_READY_ADVANCE,
+            STAGE_COMPLETED,
+        }
+        if isinstance(current_summary, dict) and maybe_int(current_summary.get("fetch", {}).get("step_count")) == 0 and current_stage_allows_fetch:
+            selections_complete, selected_count = source_selection_state(current_summary)
+            if not (selections_complete and selected_count == 0):
+                issues.append(
+                    f"{current_round_id} is currently at '{round_status_label(current_summary)}' and has not started round-level fetching yet."
+                )
         if not issues:
             issues.append("No structural blocker is currently detected, but the workflow still needs to advance stage by stage.")
         return issues
@@ -1178,6 +1409,9 @@ def render_run_summary_markdown(
         "task_count": "Task count" if lang == "en" else "任务数量",
         "task_list": "#### Tasks" if lang == "en" else "#### 任务列表",
         "no_tasks": "- No tasks are available for this round yet." if lang == "en" else "- 本轮尚无任务清单。",
+        "source_selection": "#### Source Selection" if lang == "en" else "#### 数据源选择",
+        "selected_sources": "Selected sources" if lang == "en" else "已选源",
+        "no_source_selection": "No source-selection generated." if lang == "en" else "未生成 source-selection。",
         "source": "Sources" if lang == "en" else "来源",
         "depends_on": "Depends on" if lang == "en" else "依赖",
         "fetch": "#### Fetch Execution" if lang == "en" else "#### 数据抓取",
@@ -1282,6 +1516,20 @@ def render_run_summary_markdown(
                 lines.append(line)
         else:
             lines.append(labels["no_tasks"])
+
+        lines.extend(["", labels["source_selection"], ""])
+        source_selections = summary.get("source_selections", {}) if isinstance(summary.get("source_selections"), dict) else {}
+        for role in SOURCE_SELECTION_ROLES:
+            selection = source_selections.get(role)
+            if not isinstance(selection, dict):
+                lines.append(f"- [{role_label(role)}] {labels['no_source_selection']}")
+                continue
+            selected_sources = selection.get("selected_sources") if isinstance(selection.get("selected_sources"), list) else []
+            line = (
+                f"- [{role_label(role)}] {maybe_text(selection.get('status'))}: {maybe_text(selection.get('summary'))} "
+                f"{labels['selected_sources']}: {format_list(selected_sources)}."
+            )
+            lines.append(line)
 
         lines.extend(["", labels["fetch"], ""])
         fetch = summary.get("fetch", {})
@@ -1433,6 +1681,20 @@ def ensure_task_review_matches(payload: Any, *, round_id: str) -> None:
             raise ValueError(f"Task round_id mismatch: expected {round_id}, got {item_round_id}")
 
 
+def ensure_source_selection_matches(payload: Any, *, round_id: str, role: str) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("Source-selection payload must be a JSON object.")
+    payload_round_id = maybe_text(payload.get("round_id"))
+    payload_role = maybe_text(payload.get("agent_role"))
+    payload_status = maybe_text(payload.get("status"))
+    if payload_round_id and payload_round_id != round_id:
+        raise ValueError(f"Source-selection round_id mismatch: expected {round_id}, got {payload_round_id}")
+    if payload_role and payload_role != role:
+        raise ValueError(f"Source-selection agent_role mismatch: expected {role}, got {payload_role}")
+    if payload_status == "pending":
+        raise ValueError("Source-selection payload must not remain pending when imported into the supervisor.")
+
+
 def ensure_report_matches(payload: Any, *, round_id: str, role: str) -> None:
     if not isinstance(payload, dict):
         raise ValueError("Report payload must be a JSON object.")
@@ -1457,15 +1719,49 @@ def import_task_review_payload(*, run_dir: Path, state: dict[str, Any], payload:
     ensure_task_review_matches(payload, round_id=round_id)
     target = tasks_path(run_dir, round_id)
     write_json(target, payload, pretty=True)
-    state["stage"] = STAGE_READY_PREPARE
+    state["stage"] = STAGE_AWAITING_SOURCE_SELECTION
     state["imports"] = {
         "task_review_received": True,
+        "source_selection_roles_received": [],
         "report_roles_received": [],
         "decision_received": False,
     }
     save_state(run_dir, state)
     return {
         "imported_kind": "round-task",
+        "input_path": str(source_path),
+        "target_path": str(target),
+        "state": build_status_payload(run_dir, state),
+    }
+
+
+def import_source_selection_payload(
+    *,
+    run_dir: Path,
+    state: dict[str, Any],
+    role: str,
+    payload: Any,
+    source_path: Path,
+) -> dict[str, Any]:
+    round_id = maybe_text(state.get("current_round_id"))
+    ensure_source_selection_matches(payload, round_id=round_id, role=role)
+    target = source_selection_path(run_dir, round_id, role)
+    write_json(target, payload, pretty=True)
+
+    imports = state.get("imports", {}) if isinstance(state.get("imports"), dict) else {}
+    received = {
+        maybe_text(item)
+        for item in imports.get("source_selection_roles_received", [])
+        if maybe_text(item)
+    }
+    received.add(role)
+    imports["source_selection_roles_received"] = sorted(received)
+    state["imports"] = imports
+    state["stage"] = STAGE_READY_PREPARE if received == set(SOURCE_SELECTION_ROLES) else STAGE_AWAITING_SOURCE_SELECTION
+    save_state(run_dir, state)
+    return {
+        "imported_kind": "source-selection",
+        "role": role,
         "input_path": str(source_path),
         "target_path": str(target),
         "state": build_status_payload(run_dir, state),
@@ -1523,6 +1819,22 @@ def current_agent_turn(*, state: dict[str, Any], requested_role: str) -> tuple[s
             raise ValueError("Current stage only accepts role=moderator.")
         return ("moderator", "task-review", "round-task")
 
+    if stage == STAGE_AWAITING_SOURCE_SELECTION:
+        missing = [
+            role
+            for role in SOURCE_SELECTION_ROLES
+            if role not in {maybe_text(item) for item in imports.get("source_selection_roles_received", [])}
+        ]
+        if requested:
+            if requested not in SOURCE_SELECTION_ROLES:
+                raise ValueError("Source-selection stage requires role=sociologist or role=environmentalist.")
+            if requested not in missing:
+                raise ValueError(f"Role {requested} has already been imported for this round.")
+            return (requested, "source-selection", "source-selection")
+        if len(missing) == 1:
+            return (missing[0], "source-selection", "source-selection")
+        raise ValueError("Current stage needs --role sociologist or --role environmentalist.")
+
     if stage == STAGE_AWAITING_DECISION:
         if requested and requested != "moderator":
             raise ValueError("Current stage only accepts role=moderator.")
@@ -1570,6 +1882,22 @@ def build_agent_message(*, run_dir: Path, state: dict[str, Any], role: str, turn
         if history_text:
             sections.append("=== HISTORICAL CASE CONTEXT ===\n" + history_text)
         return "\n\n".join(sections)
+
+    if turn_kind == "source-selection":
+        prompt_text = load_text(source_selection_prompt_path(run_dir, round_id, role))
+        packet_text = load_text(source_selection_packet_path(run_dir, round_id, role))
+        return "\n\n".join(
+            [
+                session_text,
+                (
+                    f"Current automated turn: {role} source selection for {round_id}.\n"
+                    "The required packet content is embedded below. Do not ask for filesystem access. "
+                    "Return only the final JSON object."
+                ),
+                "=== SOURCE SELECTION PROMPT ===\n" + prompt_text,
+                "=== SOURCE SELECTION PACKET.JSON ===\n" + packet_text,
+            ]
+        )
 
     if turn_kind == "report":
         prompt_text = load_text(report_prompt_path(run_dir, round_id, role))
@@ -1829,6 +2157,7 @@ def continue_run_data_plane(run_dir: Path, state: dict[str, Any]) -> dict[str, A
     state["stage"] = STAGE_AWAITING_REPORTS
     state["imports"] = {
         "task_review_received": True,
+        "source_selection_roles_received": list(SOURCE_SELECTION_ROLES),
         "report_roles_received": [],
         "decision_received": False,
     }
@@ -1883,6 +2212,7 @@ def continue_advance_round(run_dir: Path, state: dict[str, Any]) -> dict[str, An
     state["stage"] = STAGE_AWAITING_TASK_REVIEW
     state["imports"] = {
         "task_review_received": False,
+        "source_selection_roles_received": [],
         "report_roles_received": [],
         "decision_received": False,
     }
@@ -1930,6 +2260,18 @@ def command_import_task_review(args: argparse.Namespace) -> dict[str, Any]:
     validate_input_file("round-task", input_path)
     payload = read_json(input_path)
     return import_task_review_payload(run_dir=run_dir, state=state, payload=payload, source_path=input_path)
+
+
+def command_import_source_selection(args: argparse.Namespace) -> dict[str, Any]:
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    input_path = Path(args.input).expanduser().resolve()
+    role = args.role
+    state = load_state(run_dir)
+    if maybe_text(state.get("stage")) != STAGE_AWAITING_SOURCE_SELECTION:
+        raise ValueError("import-source-selection is only allowed while waiting for expert source selection.")
+    validate_input_file("source-selection", input_path)
+    payload = read_json(input_path)
+    return import_source_selection_payload(run_dir=run_dir, state=state, role=role, payload=payload, source_path=input_path)
 
 
 def command_import_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -1986,6 +2328,14 @@ def command_run_agent_step(args: argparse.Namespace) -> dict[str, Any]:
     payload = result["payload"]
     if schema_kind == "round-task":
         imported = import_task_review_payload(run_dir=run_dir, state=state, payload=payload, source_path=response_path)
+    elif schema_kind == "source-selection":
+        imported = import_source_selection_payload(
+            run_dir=run_dir,
+            state=state,
+            role=role,
+            payload=payload,
+            source_path=response_path,
+        )
     elif schema_kind == "expert-report":
         imported = import_report_payload(run_dir=run_dir, state=state, role=role, payload=payload, source_path=response_path)
     elif schema_kind == "council-decision":
@@ -2170,7 +2520,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_agent = sub.add_parser("run-agent-step", help="Send the current turn to OpenClaw, receive JSON, and import it.")
     run_agent.add_argument("--run-dir", required=True, help="Eco-council run directory.")
-    run_agent.add_argument("--role", default="", choices=("", "moderator", "sociologist", "environmentalist"), help="Optional role override for expert-report stages.")
+    run_agent.add_argument("--role", default="", choices=("", "moderator", "sociologist", "environmentalist"), help="Optional role override for source-selection or expert-report stages.")
     run_agent.add_argument("--timeout-seconds", type=int, default=600, help="OpenClaw agent timeout.")
     run_agent.add_argument("--thinking", default="low", choices=("off", "minimal", "low", "medium", "high"), help="OpenClaw thinking level.")
     run_agent.add_argument("--yes", action="store_true", help="Skip interactive approval.")
@@ -2180,6 +2530,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_task.add_argument("--run-dir", required=True, help="Eco-council run directory.")
     import_task.add_argument("--input", required=True, help="JSON file returned by the moderator.")
     import_task.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+
+    import_source_selection = sub.add_parser("import-source-selection", help="Import one source-selection JSON into the canonical role path.")
+    import_source_selection.add_argument("--run-dir", required=True, help="Eco-council run directory.")
+    import_source_selection.add_argument("--role", required=True, choices=SOURCE_SELECTION_ROLES, help="Expert role.")
+    import_source_selection.add_argument("--input", required=True, help="JSON file returned by the expert agent.")
+    import_source_selection.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     import_report = sub.add_parser("import-report", help="Import one expert-report JSON into the draft path.")
     import_report.add_argument("--run-dir", required=True, help="Eco-council run directory.")
@@ -2206,6 +2562,7 @@ def main(argv: list[str] | None = None) -> int:
         "continue-run": command_continue_run,
         "run-agent-step": command_run_agent_step,
         "import-task-review": command_import_task_review,
+        "import-source-selection": command_import_source_selection,
         "import-report": command_import_report,
         "import-decision": command_import_decision,
     }

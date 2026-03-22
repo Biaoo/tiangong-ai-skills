@@ -1,6 +1,6 @@
 ---
 name: eco-council-data-contract
-description: Define, validate, and scaffold shared data contracts for eco-council multi-agent runs, rounds, tasks, claims, observations, evidence cards, expert reports, and moderator decisions. Use when Codex needs to standardize data exchange between moderator, sociologist, environmentalist, and historian agents, create canonical JSON or SQLite schemas, or plan deterministic normalization before OpenClaw orchestration and case-retrieval RAG.
+description: Define, validate, and scaffold shared data contracts for eco-council multi-agent runs, rounds, tasks, expert source selections, claims, observations, evidence cards, expert reports, and moderator decisions. Use when Codex needs to standardize data exchange between moderator, sociologist, environmentalist, and historian agents, create canonical JSON or SQLite schemas, or plan deterministic normalization before OpenClaw orchestration and case-retrieval RAG.
 ---
 
 # Eco Council Data Contract
@@ -8,7 +8,7 @@ description: Define, validate, and scaffold shared data contracts for eco-counci
 ## Core Goal
 
 - Keep one shared contract for the eco-council control plane and evidence plane.
-- Validate mission, round-task, claim, observation, evidence-card, expert-report, and moderator-decision payloads before OpenClaw agents exchange them.
+- Validate mission, round-task, source-selection, claim, observation, evidence-card, expert-report, and moderator-decision payloads before OpenClaw agents exchange them.
 - Scaffold a repeatable run directory and initialize a canonical SQLite store for downstream normalization and linking.
 
 ## Workflow
@@ -91,6 +91,7 @@ python3 scripts/eco_council_contract.py validate-bundle \
 
 - `mission`: moderator-owned run charter and shared window/region constraints.
 - `round-task`: moderator-assigned work item for one expert role in one round.
+- `source-selection`: expert-owned audited decision about whether any source is needed and which allowed sources may run.
 - `claim`: sociologist-produced public or policy assertion that may need physical validation.
 - `observation`: environmentalist-produced normalized measurement or event summary from one physical source.
 - `evidence-card`: linked assessment between one claim and one or more observations.
@@ -124,4 +125,5 @@ python3 scripts/eco_council_contract.py validate-bundle \
 - Let moderator, sociologist, environmentalist, and historian exchange only canonical files defined by this skill.
 - Keep raw fetch outputs under `raw/` and canonical outputs under `normalized/` or `shared/`.
 - Use moderator rounds externally in OpenClaw; this skill only scaffolds and validates round state.
+- Scaffolded rounds now include placeholder `source_selection.json` files for sociologist and environmentalist so audited source choice has one canonical location.
 - Use `scaffold-round` after moderator approval instead of mutating earlier round folders in place.

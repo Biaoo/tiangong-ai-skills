@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0.0",
+  "selection_id": "source-selection-sociologist-round-001",
+  "run_id": "eco-20260320-chiangmai-smoke",
+  "round_id": "round-001",
+  "agent_role": "sociologist",
+  "status": "complete",
+  "summary": "Use broad public discussion sources for this round and skip policy or long-tail video sources.",
+  "task_ids": [
+    "task-sociologist-round-001-01"
+  ],
+  "allowed_sources": [
+    "gdelt-doc-search",
+    "bluesky-cascade-fetch",
+    "youtube-video-search",
+    "youtube-comments-fetch",
+    "regulationsgov-comments-fetch",
+    "regulationsgov-comment-detail-fetch"
+  ],
+  "selected_sources": [
+    "gdelt-doc-search",
+    "bluesky-cascade-fetch"
+  ],
+  "source_decisions": [
+    {
+      "source_skill": "gdelt-doc-search",
+      "selected": true,
+      "reason": "Use broad article discovery for public-claim coverage."
+    },
+    {
+      "source_skill": "bluesky-cascade-fetch",
+      "selected": true,
+      "reason": "Fast-moving public discussion is relevant for diffusion and recency."
+    },
+    {
+      "source_skill": "youtube-video-search",
+      "selected": false,
+      "reason": "Video discovery is not necessary for this narrow smoke round."
+    },
+    {
+      "source_skill": "youtube-comments-fetch",
+      "selected": false,
+      "reason": "Comment collection is unnecessary without a prior video-collection objective."
+    },
+    {
+      "source_skill": "regulationsgov-comments-fetch",
+      "selected": false,
+      "reason": "No policy or docket angle is in scope for this round."
+    },
+    {
+      "source_skill": "regulationsgov-comment-detail-fetch",
+      "selected": false,
+      "reason": "Detailed docket comments are unnecessary because no policy source is needed."
+    }
+  ]
+}

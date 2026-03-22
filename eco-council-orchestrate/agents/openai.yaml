@@ -1,4 +1,4 @@
 interface:
   display_name: "Eco Council Orchestrate"
-  short_description: "Eco council round orchestration"
-  default_prompt: "Use $eco-council-orchestrate to bootstrap an eco-council run, prepare OpenClaw round handoffs, execute deterministic normalization/reporting, and advance to the next round safely."
+  short_description: "Eco council orchestration and source planning"
+  default_prompt: "Use $eco-council-orchestrate to bootstrap an eco-council run, honor audited source selections, prepare round fetch plans, run deterministic normalization/reporting, and advance safely."

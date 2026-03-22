@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/eco-council-data-contract/eco_council.schema.json",
   "title": "Eco Council Data Contract",
-  "description": "Shared schema definitions for eco-council missions, round tasks, claims, observations, evidence cards, expert reports, and moderator decisions.",
+  "description": "Shared schema definitions for eco-council missions, round tasks, expert source selections, claims, observations, evidence cards, expert reports, and moderator decisions.",
   "$defs": {
     "nonEmptyString": {
       "type": "string",
@@ -163,6 +163,26 @@
         "reason"
       ]
     },
+    "sourceDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_skill": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "source_skill",
+        "selected",
+        "reason"
+      ]
+    },
     "roundTask": {
       "type": "object",
       "additionalProperties": false,
@@ -210,6 +230,7 @@
             "enum": [
               "mission",
               "round-task",
+              "source-selection",
               "claim",
               "observation",
               "evidence-card",
@@ -233,6 +254,78 @@
         "assigned_role",
         "objective",
         "status"
+      ]
+    },
+    "sourceSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "selection_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "run_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "round_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "agent_role": {
+          "enum": [
+            "sociologist",
+            "environmentalist",
+            "historian"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "complete",
+            "blocked"
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "allowed_sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "selected_sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "source_decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceDecision"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "selection_id",
+        "run_id",
+        "round_id",
+        "agent_role",
+        "status",
+        "summary",
+        "task_ids",
+        "allowed_sources",
+        "selected_sources",
+        "source_decisions"
       ]
     },
     "mission": {

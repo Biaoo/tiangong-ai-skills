@@ -30,6 +30,7 @@ ROUND_DIR_PATTERN = re.compile(r"^round_(\d{3})$")
 OBJECT_KINDS = (
     "mission",
     "round-task",
+    "source-selection",
     "claim",
     "observation",
     "evidence-card",
@@ -57,6 +58,8 @@ CONFIDENCE_VALUES = {"low", "medium", "high"}
 REPORT_STATUSES = {"complete", "needs-more-evidence", "blocked"}
 MODERATOR_STATUSES = {"continue", "complete", "blocked"}
 EVIDENCE_SUFFICIENCY = {"sufficient", "partial", "insufficient"}
+SOURCE_SELECTION_ROLES = {"sociologist", "environmentalist", "historian"}
+SOURCE_SELECTION_STATUSES = {"pending", "complete", "blocked"}
 
 
 def utc_now_iso() -> str:
@@ -232,6 +235,16 @@ def validate_string_list(
     return result
 
 
+def validate_unique_strings(values: list[str], path: str, issues: IssueCollector) -> None:
+    seen: set[str] = set()
+    for index, item in enumerate(values):
+        key = item.casefold()
+        if key in seen:
+            issues.add(f"{path}[{index}]", "Duplicate string entry.", actual=item)
+            continue
+        seen.add(key)
+
+
 def validate_schema_version(obj: dict[str, Any], path: str, issues: IssueCollector) -> str | None:
     value = require_string(obj, "schema_version", path, issues)
     if value is None:
@@ -316,6 +329,15 @@ def validate_recommendation(value: Any, path: str, issues: IssueCollector) -> No
     require_string(obj, "reason", path, issues)
 
 
+def validate_source_decision(value: Any, path: str, issues: IssueCollector) -> None:
+    obj = require_object(value, path, issues)
+    if obj is None:
+        return
+    require_string(obj, "source_skill", path, issues)
+    require_bool(obj, "selected", path, issues)
+    require_string(obj, "reason", path, issues)
+
+
 def validate_round_task_object(obj: Any, path: str, issues: IssueCollector) -> None:
     record = require_object(obj, path, issues)
     if record is None:
@@ -342,6 +364,90 @@ def validate_round_task_object(obj: Any, path: str, issues: IssueCollector) -> N
         issues.add(f"{path}.inputs", "Expected an object when provided.", actual=record["inputs"])
     if "notes" in record and record["notes"] is not None and not isinstance(record["notes"], str):
         issues.add(f"{path}.notes", "Expected a string when provided.", actual=record["notes"])
+
+
+def validate_source_selection_object(obj: Any, path: str, issues: IssueCollector) -> None:
+    record = require_object(obj, path, issues)
+    if record is None:
+        return
+    validate_schema_version(record, path, issues)
+    require_string(record, "selection_id", path, issues)
+    require_string(record, "run_id", path, issues)
+    require_string(record, "round_id", path, issues)
+    require_enum(record, "agent_role", path, issues, allowed=SOURCE_SELECTION_ROLES)
+    status = require_enum(record, "status", path, issues, allowed=SOURCE_SELECTION_STATUSES)
+    require_string(record, "summary", path, issues)
+    task_ids = validate_string_list(record.get("task_ids"), f"{path}.task_ids", issues)
+    validate_unique_strings(task_ids, f"{path}.task_ids", issues)
+    allowed_sources = validate_string_list(record.get("allowed_sources"), f"{path}.allowed_sources", issues)
+    validate_unique_strings(allowed_sources, f"{path}.allowed_sources", issues)
+    selected_sources = validate_string_list(record.get("selected_sources"), f"{path}.selected_sources", issues)
+    validate_unique_strings(selected_sources, f"{path}.selected_sources", issues)
+
+    decisions = record.get("source_decisions")
+    if not isinstance(decisions, list):
+        issues.add(f"{path}.source_decisions", "Expected a list.", actual=decisions)
+        decisions = []
+
+    allowed_lookup = {item.casefold() for item in allowed_sources}
+    selected_lookup = {item.casefold() for item in selected_sources}
+    decision_keys: set[str] = set()
+    selected_by_decision: set[str] = set()
+
+    for index, decision in enumerate(decisions):
+        item_path = f"{path}.source_decisions[{index}]"
+        validate_source_decision(decision, item_path, issues)
+        if not isinstance(decision, dict):
+            continue
+        source_skill = require_string(decision, "source_skill", item_path, issues)
+        selected = require_bool(decision, "selected", item_path, issues)
+        if source_skill is None:
+            continue
+        key = source_skill.casefold()
+        if key in decision_keys:
+            issues.add(f"{item_path}.source_skill", "Duplicate source_skill entry.", actual=source_skill)
+        else:
+            decision_keys.add(key)
+        if allowed_lookup and key not in allowed_lookup:
+            issues.add(f"{item_path}.source_skill", "source_skill must also appear in allowed_sources.", actual=source_skill)
+        if selected is True:
+            selected_by_decision.add(key)
+        elif key in selected_lookup:
+            issues.add(
+                f"{item_path}.selected",
+                "selected_sources cannot include a source whose decision has selected=false.",
+                actual=source_skill,
+            )
+
+    for index, source_skill in enumerate(selected_sources):
+        key = source_skill.casefold()
+        if allowed_lookup and key not in allowed_lookup:
+            issues.add(
+                f"{path}.selected_sources[{index}]",
+                "Selected source must also appear in allowed_sources.",
+                actual=source_skill,
+            )
+        if status != "pending" and key not in decision_keys:
+            issues.add(
+                f"{path}.selected_sources[{index}]",
+                "Selected source must also appear in source_decisions once selection is complete or blocked.",
+                actual=source_skill,
+            )
+        if key not in selected_by_decision:
+            issues.add(
+                f"{path}.selected_sources[{index}]",
+                "Selected source must have a matching source_decisions entry with selected=true.",
+                actual=source_skill,
+            )
+
+    if status != "pending":
+        for index, source_skill in enumerate(allowed_sources):
+            if source_skill.casefold() not in decision_keys:
+                issues.add(
+                    f"{path}.allowed_sources[{index}]",
+                    "Each allowed source must have one source_decisions entry once selection is complete or blocked.",
+                    actual=source_skill,
+                )
 
 
 def validate_mission_object(obj: Any, path: str, issues: IssueCollector) -> None:
@@ -527,6 +633,7 @@ def validate_council_decision_object(obj: Any, path: str, issues: IssueCollector
 VALIDATORS = {
     "mission": validate_mission_object,
     "round-task": validate_round_task_object,
+    "source-selection": validate_source_selection_object,
     "claim": validate_claim_object,
     "observation": validate_observation_object,
     "evidence-card": validate_evidence_card_object,
@@ -537,6 +644,7 @@ VALIDATORS = {
 EXAMPLES: dict[str, Any] = {
     "mission": read_json(EXAMPLES_DIR / "mission.json"),
     "round-task": read_json(EXAMPLES_DIR / "round_task.json"),
+    "source-selection": read_json(EXAMPLES_DIR / "source_selection.json"),
     "claim": read_json(EXAMPLES_DIR / "claim.json"),
     "observation": read_json(EXAMPLES_DIR / "observation.json"),
     "evidence-card": read_json(EXAMPLES_DIR / "evidence_card.json"),
@@ -634,6 +742,27 @@ def round_sort_key(round_id: str) -> tuple[int, str]:
         return (sys.maxsize, round_id)
 
 
+def source_policy_for_role(mission: dict[str, Any], role: str) -> list[str]:
+    policy = mission.get("source_policy")
+    if not isinstance(policy, dict):
+        return []
+    selected = policy.get(role)
+    if not isinstance(selected, list):
+        return []
+    values = [item for item in selected if isinstance(item, str) and item.strip()]
+    return values
+
+
+def expected_output_kinds_for_role(role: str) -> list[str]:
+    if role == "sociologist":
+        return ["source-selection", "claim", "expert-report"]
+    if role == "environmentalist":
+        return ["source-selection", "observation", "expert-report"]
+    if role == "historian":
+        return ["expert-report"]
+    return ["expert-report"]
+
+
 def default_round_tasks(*, mission: dict[str, Any], round_id: str) -> list[dict[str, Any]]:
     run_id = mission["run_id"]
     geometry = mission.get("region", {}).get("geometry") if isinstance(mission.get("region"), dict) else None
@@ -647,6 +776,7 @@ def default_round_tasks(*, mission: dict[str, Any], round_id: str) -> list[dict[
     sociologist_task["objective"] = (
         "Identify up to three public claims within the mission window that are worth physical validation."
     )
+    sociologist_task["expected_output_kinds"] = expected_output_kinds_for_role("sociologist")
 
     environmental_task = copy.deepcopy(EXAMPLES["round-task"])
     environmental_task["task_id"] = f"task-environmentalist-{round_id}-01"
@@ -656,9 +786,33 @@ def default_round_tasks(*, mission: dict[str, Any], round_id: str) -> list[dict[
     environmental_task["objective"] = (
         "Validate mission-relevant physical evidence in the same window using the configured environment skills."
     )
+    environmental_task["expected_output_kinds"] = expected_output_kinds_for_role("environmentalist")
     environmental_task["inputs"] = {"mission_geometry": geometry, "mission_window": mission_window}
 
     return [sociologist_task, environmental_task]
+
+
+def placeholder_source_selection(
+    *,
+    run_id: str,
+    round_id: str,
+    role: str,
+    task_ids: list[str],
+    allowed_sources: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "selection_id": f"source-selection-{role}-{round_id}",
+        "run_id": run_id,
+        "round_id": round_id,
+        "agent_role": role,
+        "status": "pending",
+        "summary": f"Pending {role} source selection.",
+        "task_ids": task_ids,
+        "allowed_sources": allowed_sources,
+        "selected_sources": [],
+        "source_decisions": [],
+    }
 
 
 def placeholder_report(*, run_id: str, round_id: str, role: str) -> dict[str, Any]:
@@ -705,17 +859,35 @@ def scaffold_round(
     run_id: str,
     round_id: str,
     tasks: list[dict[str, Any]],
+    mission: dict[str, Any] | None,
     pretty: bool,
 ) -> dict[str, Any]:
     run_path = run_dir.expanduser().resolve()
     round_path = run_path / round_dir_name(round_id)
     normalized_tasks = normalize_round_tasks(tasks=tasks, run_id=run_id, round_id=round_id)
+    source_selection_roles = ("sociologist", "environmentalist")
+    source_selection_files = {
+        role: placeholder_source_selection(
+            run_id=run_id,
+            round_id=round_id,
+            role=role,
+            task_ids=[
+                item["task_id"]
+                for item in normalized_tasks
+                if item.get("assigned_role") == role and isinstance(item.get("task_id"), str)
+            ],
+            allowed_sources=source_policy_for_role(mission or {}, role),
+        )
+        for role in source_selection_roles
+    }
 
     files_to_write = {
         round_path / "moderator" / "tasks.json": normalized_tasks,
         round_path / "shared" / "claims.json": [],
         round_path / "shared" / "observations.json": [],
         round_path / "shared" / "evidence_cards.json": [],
+        round_path / "sociologist" / "source_selection.json": source_selection_files["sociologist"],
+        round_path / "environmentalist" / "source_selection.json": source_selection_files["environmentalist"],
         round_path / "sociologist" / "sociologist_report.json": placeholder_report(
             run_id=run_id,
             round_id=round_id,
@@ -779,6 +951,7 @@ def scaffold_run_from_mission(
         run_id=run_id,
         round_id=round_id,
         tasks=task_list,
+        mission=mission,
         pretty=pretty,
     )
     return {
@@ -860,6 +1033,8 @@ def validate_bundle(run_dir: Path) -> dict[str, Any]:
             round_path / "shared" / "claims.json": "claim",
             round_path / "shared" / "observations.json": "observation",
             round_path / "shared" / "evidence_cards.json": "evidence-card",
+            round_path / "sociologist" / "source_selection.json": "source-selection",
+            round_path / "environmentalist" / "source_selection.json": "source-selection",
             round_path / "sociologist" / "sociologist_report.json": "expert-report",
             round_path / "environmentalist" / "environmentalist_report.json": "expert-report",
         }
@@ -1014,6 +1189,7 @@ def command_scaffold_round(args: argparse.Namespace) -> dict[str, Any]:
         run_id=run_id,
         round_id=args.round_id,
         tasks=task_payload,
+        mission=mission_payload,
         pretty=args.pretty,
     )
     result["mission_input"] = str(mission_path)

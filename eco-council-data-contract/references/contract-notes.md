@@ -12,6 +12,7 @@ Use one shared contract across all eco-council roles:
 Keep role boundaries strict:
 
 - moderator issues `mission`, `round-task`, and `council-decision`
+- sociologist and environmentalist each produce one audited `source-selection` before fetch execution
 - sociologist produces `claim` and `expert-report`
 - environmentalist produces `observation`, `evidence-card`, and `expert-report`
 - historian later produces `expert-report` plus case-support attachments outside this first contract version
@@ -62,11 +63,12 @@ Do not overwrite or mutate raw files after capture.
 One moderator round should produce:
 
 1. one or more `round-task` objects
-2. zero or more `claim` objects
-3. zero or more `observation` objects
-4. zero or more `evidence-card` objects
-5. one `expert-report` per participating role
-6. one `council-decision`
+2. one `source-selection` per expert role that may fetch data
+3. zero or more `claim` objects
+4. zero or more `observation` objects
+5. zero or more `evidence-card` objects
+6. one `expert-report` per participating role
+7. one `council-decision`
 
 If evidence is insufficient, the moderator should create new `round-task` objects for the next round instead of editing earlier tasks in place.
 

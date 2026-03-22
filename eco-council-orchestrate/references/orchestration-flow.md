@@ -7,18 +7,22 @@ Keep these phases separate:
 1. moderator review
    - mission is already fixed
    - moderator edits `tasks.json` only
-2. expert raw collection
+2. expert source selection
+   - sociologist and environmentalist decide whether any source is needed
+   - only explicitly selected sources or task-level `required_sources` may run
+   - canonical outputs live at `round_xxx/<role>/source_selection.json`
+3. expert raw collection
    - sociologist and environmentalist execute fetch commands
    - only `raw/` artifacts are written
-3. deterministic data plane
+4. deterministic data plane
    - normalize
    - link evidence
    - build round context
    - build report/decision drafts
-4. expert and moderator deliberation
+5. expert and moderator deliberation
    - experts revise report drafts
    - moderator revises decision draft
-5. promotion and next-round scaffolding
+6. promotion and next-round scaffolding
    - promote approved drafts
    - scaffold `round_002`, `round_003`, ...
 
@@ -26,19 +30,24 @@ Keep these phases separate:
 
 For each round:
 
-1. `prepare-round`
-2. expert agents run fetch prompts
-3. `run-data-plane`
-4. OpenClaw experts revise report drafts
-5. OpenClaw moderator revises decision draft
-6. `$eco-council-reporting promote-all`
-7. if `council_decision.next_round_required=true`, run `advance-round`
+1. moderator reviews `tasks.json`
+2. experts produce `source_selection.json`
+3. `prepare-round`
+4. expert agents run fetch prompts
+5. `run-data-plane`
+6. OpenClaw experts revise report drafts
+7. OpenClaw moderator revises decision draft
+8. `$eco-council-reporting promote-all`
+9. if `council_decision.next_round_required=true`, run `advance-round`
 
 ## File Boundaries
 
 - moderator input:
   - `mission.json`
   - `round_xxx/moderator/tasks.json`
+- expert source-selection output:
+  - `round_xxx/sociologist/source_selection.json`
+  - `round_xxx/environmentalist/source_selection.json`
 - expert raw output:
   - `round_xxx/<role>/raw/*`
 - deterministic exchange:

@@ -22,7 +22,17 @@ REPORT_ROLES = ("sociologist", "environmentalist")
 PROMOTABLE_REPORT_ROLES = ("sociologist", "environmentalist", "historian")
 VERDICT_SCORES = {"supports": 1.0, "contradicts": 1.0, "mixed": 0.6, "insufficient": 0.25}
 METEOROLOGY_METRICS = {"temperature_2m", "wind_speed_10m", "relative_humidity_2m", "precipitation_sum", "precipitation"}
-PRECIPITATION_METRICS = {"precipitation", "precipitation_sum", "river_discharge", "soil_moisture_0_to_7cm"}
+PRECIPITATION_METRICS = {
+    "precipitation",
+    "precipitation_sum",
+    "river_discharge",
+    "river_discharge_mean",
+    "river_discharge_max",
+    "river_discharge_min",
+    "river_discharge_p25",
+    "river_discharge_p75",
+    "soil_moisture_0_to_7cm",
+}
 MAX_SOURCES_PER_NEXT_TASK = 2
 QUESTION_RULES = (
     ("station-grade corroboration is missing", "Can station-grade air-quality measurements be added for the same mission window?"),
@@ -540,9 +550,9 @@ def gap_to_question(gap: str) -> str:
 
 def expected_output_kinds_for_role(role: str) -> list[str]:
     if role == "sociologist":
-        return ["claim", "expert-report"]
+        return ["source-selection", "claim", "expert-report"]
     if role == "environmentalist":
-        return ["observation", "expert-report"]
+        return ["source-selection", "observation", "expert-report"]
     if role == "historian":
         return ["expert-report"]
     return ["expert-report"]

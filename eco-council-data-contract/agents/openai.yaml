@@ -1,4 +1,4 @@
 interface:
   display_name: "Eco Council Data Contract"
-  short_description: "Eco council schemas and bundle validation"
-  default_prompt: "Use $eco-council-data-contract to define, validate, and scaffold shared data contracts for eco-council missions, round tasks, claims, observations, evidence cards, expert reports, and moderator decisions before OpenClaw orchestration."
+  short_description: "Eco council schemas, source selections, validation"
+  default_prompt: "Use $eco-council-data-contract to define, validate, and scaffold shared data contracts for eco-council missions, round tasks, source selections, claims, observations, evidence cards, expert reports, and moderator decisions."

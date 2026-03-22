@@ -35,6 +35,7 @@ python3 scripts/eco_council_reporting.py build-report-packets \
 ```
 
 2. Build the moderator decision packet and next-round task drafts.
+- Sociologist and environmentalist next-round tasks now include `source-selection` in `expected_output_kinds` so audited source choice remains explicit before any future fetch stage.
 
 ```bash
 python3 scripts/eco_council_reporting.py build-decision-packet \

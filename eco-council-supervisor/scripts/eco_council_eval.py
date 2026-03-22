@@ -50,6 +50,25 @@ def round_dir(run_dir: Path, round_id: str) -> Path:
     return run_dir / round_directory_name(round_id)
 
 
+def source_selection_path(run_dir: Path, round_id: str, role: str) -> Path:
+    return round_dir(run_dir, round_id) / role / "source_selection.json"
+
+
+def unique_strings(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = maybe_text(value)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+    return output
+
+
 def extract_json_suffix(text: str) -> Any:
     clean = text.strip()
     if not clean:
@@ -92,6 +111,73 @@ def load_case(case_path: Path) -> dict[str, Any]:
     return payload
 
 
+def source_policy_for_role(mission: dict[str, Any], role: str) -> list[str]:
+    policy = mission.get("source_policy")
+    if not isinstance(policy, dict):
+        return []
+    selected = policy.get(role)
+    if not isinstance(selected, list):
+        return []
+    return unique_strings([maybe_text(item) for item in selected if maybe_text(item)])
+
+
+def tasks_for_role(tasks: list[dict[str, Any]], role: str) -> list[dict[str, Any]]:
+    return [task for task in tasks if maybe_text(task.get("assigned_role")) == role]
+
+
+def task_selected_sources(tasks: list[dict[str, Any]]) -> list[str]:
+    preferred: list[str] = []
+    for task in tasks:
+        inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+        values = inputs.get("preferred_sources")
+        if isinstance(values, list):
+            preferred.extend(maybe_text(item) for item in values if maybe_text(item))
+    return unique_strings(preferred)
+
+
+def default_source_selection(
+    *,
+    mission: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    round_id: str,
+    role: str,
+) -> dict[str, Any]:
+    run_id = maybe_text(mission.get("run_id"))
+    role_tasks = tasks_for_role(tasks, role)
+    allowed_sources = source_policy_for_role(mission, role)
+    selected_lookup = {source.casefold() for source in task_selected_sources(role_tasks)}
+    selected_sources = [source for source in allowed_sources if source.casefold() in selected_lookup]
+    summary = (
+        f"Replay fixture selected {', '.join(selected_sources)}."
+        if selected_sources
+        else "Replay fixture intentionally selected no sources for this role."
+    )
+    return {
+        "schema_version": "1.0.0",
+        "selection_id": f"source-selection-{role}-{round_id}",
+        "run_id": run_id,
+        "round_id": round_id,
+        "agent_role": role,
+        "status": "complete",
+        "summary": summary,
+        "task_ids": [maybe_text(task.get("task_id")) for task in role_tasks if maybe_text(task.get("task_id"))],
+        "allowed_sources": allowed_sources,
+        "selected_sources": selected_sources,
+        "source_decisions": [
+            {
+                "source_skill": source,
+                "selected": source.casefold() in selected_lookup,
+                "reason": (
+                    "Selected by replay fixture task preferred_sources."
+                    if source.casefold() in selected_lookup
+                    else "Not selected by replay fixture task preferred_sources."
+                ),
+            }
+            for source in allowed_sources
+        ],
+    }
+
+
 def materialize_case(case: dict[str, Any], run_dir: Path, *, pretty: bool) -> str:
     mission = case.get("mission")
     if not isinstance(mission, dict):
@@ -102,10 +188,23 @@ def materialize_case(case: dict[str, Any], run_dir: Path, *, pretty: bool) -> st
 
     write_json(run_dir / "mission.json", mission, pretty=pretty)
     base_round = round_dir(run_dir, round_id)
-    write_json(base_round / "moderator" / "tasks.json", case.get("tasks", []), pretty=pretty)
+    tasks = case.get("tasks", [])
+    write_json(base_round / "moderator" / "tasks.json", tasks, pretty=pretty)
     write_json(base_round / "shared" / "claims.json", case.get("claims", []), pretty=pretty)
     write_json(base_round / "shared" / "observations.json", case.get("observations", []), pretty=pretty)
     write_json(base_round / "shared" / "evidence_cards.json", case.get("evidence_cards", []), pretty=pretty)
+    source_selections = case.get("source_selections") if isinstance(case.get("source_selections"), dict) else {}
+    task_dicts = [item for item in tasks if isinstance(item, dict)]
+    for role in ("sociologist", "environmentalist"):
+        payload = source_selections.get(role) if isinstance(source_selections, dict) else None
+        if not isinstance(payload, dict):
+            payload = default_source_selection(
+                mission=mission,
+                tasks=task_dicts,
+                round_id=round_id,
+                role=role,
+            )
+        write_json(source_selection_path(run_dir, round_id, role), payload, pretty=pretty)
     write_json(
         base_round / "moderator" / "derived" / "fetch_execution.json",
         {"statuses": case.get("fetch_statuses", [])},

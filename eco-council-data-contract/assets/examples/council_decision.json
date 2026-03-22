@@ -22,6 +22,7 @@
       "status": "planned",
       "depends_on": [],
       "expected_output_kinds": [
+        "source-selection",
         "observation",
         "expert-report"
       ],
