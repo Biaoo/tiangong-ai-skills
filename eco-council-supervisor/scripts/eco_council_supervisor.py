@@ -19,6 +19,7 @@ REPO_DIR = SKILL_DIR.parent
 ORCHESTRATE_SCRIPT = REPO_DIR / "eco-council-orchestrate" / "scripts" / "eco_council_orchestrate.py"
 REPORTING_SCRIPT = REPO_DIR / "eco-council-reporting" / "scripts" / "eco_council_reporting.py"
 CONTRACT_SCRIPT = REPO_DIR / "eco-council-data-contract" / "scripts" / "eco_council_contract.py"
+CASE_LIBRARY_SCRIPT = SKILL_DIR / "scripts" / "eco_council_case_library.py"
 
 SCHEMA_VERSION = "1.0.0"
 ROUND_ID_PATTERN = re.compile(r"^round-\d{3}$")
@@ -36,6 +37,8 @@ STAGE_AWAITING_DECISION = "awaiting-moderator-decision"
 STAGE_READY_PROMOTE = "ready-to-promote"
 STAGE_READY_ADVANCE = "ready-to-advance-round"
 STAGE_COMPLETED = "completed"
+DEFAULT_HISTORY_TOP_K = 3
+MAX_HISTORY_TOP_K = 5
 
 
 def utc_now_iso() -> str:
@@ -218,6 +221,14 @@ def reports_dir(run_dir: Path) -> Path:
     return run_dir / "reports"
 
 
+def supervisor_context_dir(run_dir: Path) -> Path:
+    return supervisor_dir(run_dir) / "context"
+
+
+def history_context_path(run_dir: Path, round_id: str) -> Path:
+    return supervisor_context_dir(run_dir) / f"{round_id}_historical_cases.txt"
+
+
 def response_base_path(run_dir: Path, round_id: str, role: str, kind: str) -> Path:
     safe_kind = kind.replace("-", "_")
     return supervisor_responses_dir(run_dir) / f"{round_id}_{role}_{safe_kind}"
@@ -298,6 +309,130 @@ def normalize_agent_prefix(value: str) -> str:
     return text or "eco-council"
 
 
+def normalize_history_top_k(value: Any) -> int:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = DEFAULT_HISTORY_TOP_K
+    return max(1, min(MAX_HISTORY_TOP_K, count))
+
+
+def ensure_history_context_config(state: dict[str, Any]) -> dict[str, Any]:
+    history = state.get("history_context")
+    if not isinstance(history, dict):
+        history = {}
+    history["db"] = maybe_text(history.get("db"))
+    history["top_k"] = normalize_history_top_k(history.get("top_k"))
+    state["history_context"] = history
+    return history
+
+
+def apply_history_cli_config(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    history = ensure_history_context_config(state)
+    if bool(getattr(args, "disable_history_context", False)):
+        history["db"] = ""
+    elif maybe_text(getattr(args, "history_db", "")):
+        history["db"] = str(Path(args.history_db).expanduser().resolve())
+    top_k_value = int(getattr(args, "history_top_k", 0) or 0)
+    if top_k_value > 0:
+        history["top_k"] = normalize_history_top_k(top_k_value)
+    state["history_context"] = history
+    return history
+
+
+def render_history_context_text(*, mission: dict[str, Any], search_payload: dict[str, Any]) -> str:
+    cases = search_payload.get("cases") if isinstance(search_payload.get("cases"), list) else []
+    region = mission.get("region") if isinstance(mission.get("region"), dict) else {}
+    lines = [
+        "Compact historical-case context from the local eco-council case library.",
+        "Use it only as planning guidance. Current-round evidence remains primary.",
+        "Do not repeat exhausted fetch paths unless the region, time window, or claim mix is materially different.",
+        "",
+        f"Current topic: {maybe_text(mission.get('topic'))}",
+        f"Current objective: {maybe_text(mission.get('objective'))}",
+        f"Current region: {maybe_text(region.get('label')) or 'n/a'}",
+        "",
+        f"Retrieved similar cases: {len(cases)}",
+    ]
+    for index, case in enumerate(cases, start=1):
+        if not isinstance(case, dict):
+            continue
+        missing = case.get("final_missing_evidence_types")
+        missing_text = ", ".join(maybe_text(item) for item in missing if maybe_text(item)) if isinstance(missing, list) else ""
+        reasons = case.get("match_reasons")
+        reason_text = ", ".join(maybe_text(item) for item in reasons if maybe_text(item)) if isinstance(reasons, list) else ""
+        lines.extend(
+            [
+                "",
+                f"{index}. case_id={maybe_text(case.get('case_id'))}; score={case.get('score')}; region={maybe_text(case.get('region_label'))}; rounds={case.get('round_count')}; moderator_status={maybe_text(case.get('final_moderator_status')) or 'unknown'}; evidence={maybe_text(case.get('final_evidence_sufficiency')) or 'unknown'}",
+                f"   topic={maybe_text(case.get('topic'))}",
+                f"   decision_summary={maybe_text(case.get('final_decision_summary')) or maybe_text(case.get('final_brief')) or 'n/a'}",
+            ]
+        )
+        if missing_text:
+            lines.append(f"   missing_evidence_types={missing_text}")
+        if reason_text:
+            lines.append(f"   match_reasons={reason_text}")
+    return "\n".join(lines)
+
+
+def write_history_context_file(run_dir: Path, state: dict[str, Any], round_id: str) -> Path | None:
+    target = history_context_path(run_dir, round_id)
+    history = ensure_history_context_config(state)
+    db_text = maybe_text(history.get("db"))
+    if not db_text:
+        if target.exists():
+            target.unlink()
+        return None
+
+    db_path = Path(db_text).expanduser().resolve()
+    if not db_path.exists():
+        if target.exists():
+            target.unlink()
+        return None
+
+    mission_payload = load_json_if_exists(mission_path(run_dir))
+    if not isinstance(mission_payload, dict):
+        if target.exists():
+            target.unlink()
+        return None
+
+    region = mission_payload.get("region") if isinstance(mission_payload.get("region"), dict) else {}
+    query = maybe_text(mission_payload.get("topic"))
+    argv = [
+        "python3",
+        str(CASE_LIBRARY_SCRIPT),
+        "search-cases",
+        "--db",
+        str(db_path),
+        "--exclude-case-id",
+        maybe_text(mission_payload.get("run_id")),
+        "--limit",
+        str(normalize_history_top_k(history.get("top_k"))),
+        "--pretty",
+    ]
+    if query:
+        argv.extend(["--query", query])
+    if maybe_text(region.get("label")):
+        argv.extend(["--region-label", maybe_text(region.get("label"))])
+
+    try:
+        payload = run_json_command(argv, cwd=REPO_DIR)
+    except Exception:
+        if target.exists():
+            target.unlink()
+        return None
+    search_payload = payload.get("payload") if isinstance(payload, dict) and isinstance(payload.get("payload"), dict) else payload
+    cases = search_payload.get("cases") if isinstance(search_payload, dict) else None
+    if not isinstance(cases, list) or not cases:
+        if target.exists():
+            target.unlink()
+        return None
+
+    write_text(target, render_history_context_text(mission=mission_payload, search_payload=search_payload))
+    return target
+
+
 def openclaw_workspace_root(run_dir: Path, state: dict[str, Any]) -> Path:
     configured = maybe_text(state.get("openclaw", {}).get("workspace_root"))
     if configured:
@@ -336,6 +471,7 @@ def session_prompt_text(*, role: str, agent_id: str) -> str:
             "4. For decision turns, return only one JSON object shaped like council-decision.",
             "5. Never add markdown, prose, or code fences.",
             "6. If a referenced local skill is unavailable in this OpenClaw instance, follow the referenced file as the source of truth anyway.",
+            "7. If compact historical-case context is provided, use it only to prioritize work and avoid redundant fetch requests; never treat it as current-round evidence.",
         ]
     else:
         rules = [
@@ -350,7 +486,7 @@ def session_prompt_text(*, role: str, agent_id: str) -> str:
     return "\n".join(header + rules)
 
 
-def role_prompt_outbox_text(*, role: str, round_id: str, prompt_path: Path) -> str:
+def role_prompt_outbox_text(*, role: str, round_id: str, prompt_path: Path, history_path: Path | None = None) -> str:
     lines = [
         f"This is your current eco-council turn for {round_id}.",
         "",
@@ -360,6 +496,15 @@ def role_prompt_outbox_text(*, role: str, round_id: str, prompt_path: Path) -> s
         "If this OpenClaw instance cannot open local files directly, ask the human to paste the file contents and then continue.",
         "Return only JSON.",
     ]
+    if role == "moderator" and history_path is not None and history_path.exists():
+        lines.extend(
+            [
+                "",
+                "Also review this compact historical-case context before answering:",
+                str(history_path),
+                "Use it only as planning guidance. Current-round evidence remains primary.",
+            ]
+        )
     if role == "moderator":
         lines.insert(0, "Use your moderator session rules.")
     else:
@@ -542,6 +687,8 @@ def refresh_supervisor_files(run_dir: Path, state: dict[str, Any]) -> None:
             session_prompt_text(role=role, agent_id=maybe_text(role_agent.get("id"))),
         )
 
+    history_path = write_history_context_file(run_dir, state, current_round_id)
+
     outbox_dir = supervisor_outbox_dir(run_dir)
     outbox_dir.mkdir(parents=True, exist_ok=True)
     for name in ("moderator_task_review", "sociologist_report", "environmentalist_report", "moderator_decision"):
@@ -557,6 +704,7 @@ def refresh_supervisor_files(run_dir: Path, state: dict[str, Any]) -> None:
                 role="moderator",
                 round_id=current_round_id,
                 prompt_path=task_review_prompt_path(run_dir, current_round_id),
+                history_path=history_path,
             ),
         )
     if stage == STAGE_AWAITING_REPORTS:
@@ -576,6 +724,7 @@ def refresh_supervisor_files(run_dir: Path, state: dict[str, Any]) -> None:
                 role="moderator",
                 round_id=current_round_id,
                 prompt_path=decision_prompt_path(run_dir, current_round_id),
+                history_path=history_path,
             ),
         )
 
@@ -606,6 +755,10 @@ def build_state_payload(*, run_dir: Path, round_id: str, agent_prefix: str) -> d
                 for role in ROLES
             },
         },
+        "history_context": {
+            "db": "",
+            "top_k": DEFAULT_HISTORY_TOP_K,
+        },
         "updated_at_utc": utc_now_iso(),
     }
 
@@ -628,6 +781,8 @@ def build_status_payload(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]
             outbox_paths[name] = str(path)
 
     session_paths = {role: str(session_prompt_path(run_dir, role)) for role in ROLES}
+    history = ensure_history_context_config(state)
+    history_file = history_context_path(run_dir, round_id) if round_id else None
     return {
         "schema_version": SCHEMA_VERSION,
         "run_dir": str(run_dir),
@@ -647,6 +802,11 @@ def build_status_payload(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]
         "outbox_paths": outbox_paths,
         "current_step_path": str(supervisor_current_step_path(run_dir)),
         "openclaw": state.get("openclaw", {}),
+        "history_context": {
+            "db": maybe_text(history.get("db")),
+            "top_k": normalize_history_top_k(history.get("top_k")),
+            "context_path": str(history_file) if history_file is not None and history_file.exists() else "",
+        },
     }
 
 
@@ -1386,24 +1546,30 @@ def current_agent_turn(*, state: dict[str, Any], requested_role: str) -> tuple[s
 def build_agent_message(*, run_dir: Path, state: dict[str, Any], role: str, turn_kind: str) -> str:
     round_id = maybe_text(state.get("current_round_id"))
     session_text = load_text(session_prompt_path(run_dir, role))
+    history_text = ""
+    if role == "moderator":
+        path = history_context_path(run_dir, round_id)
+        if path.exists():
+            history_text = load_text(path)
 
     if turn_kind == "task-review":
         prompt_text = load_text(task_review_prompt_path(run_dir, round_id))
         mission_text = load_text(mission_path(run_dir))
         tasks_text = load_text(tasks_path(run_dir, round_id))
-        return "\n\n".join(
-            [
-                session_text,
-                (
-                    f"Current automated turn: moderator task review for {round_id}.\n"
-                    "All referenced file contents are embedded below. Do not ask for filesystem access. "
-                    "Return only the final JSON list."
-                ),
-                "=== TASK REVIEW PROMPT ===\n" + prompt_text,
-                "=== MISSION.JSON ===\n" + mission_text,
-                "=== CURRENT TASKS.JSON ===\n" + tasks_text,
-            ]
-        )
+        sections = [
+            session_text,
+            (
+                f"Current automated turn: moderator task review for {round_id}.\n"
+                "All referenced file contents are embedded below. Do not ask for filesystem access. "
+                "Return only the final JSON list."
+            ),
+            "=== TASK REVIEW PROMPT ===\n" + prompt_text,
+            "=== MISSION.JSON ===\n" + mission_text,
+            "=== CURRENT TASKS.JSON ===\n" + tasks_text,
+        ]
+        if history_text:
+            sections.append("=== HISTORICAL CASE CONTEXT ===\n" + history_text)
+        return "\n\n".join(sections)
 
     if turn_kind == "report":
         prompt_text = load_text(report_prompt_path(run_dir, round_id, role))
@@ -1424,18 +1590,19 @@ def build_agent_message(*, run_dir: Path, state: dict[str, Any], role: str, turn
     if turn_kind == "decision":
         prompt_text = load_text(decision_prompt_path(run_dir, round_id))
         packet_text = load_text(decision_packet_path(run_dir, round_id))
-        return "\n\n".join(
-            [
-                session_text,
-                (
-                    f"Current automated turn: moderator decision drafting for {round_id}.\n"
-                    "The required packet content is embedded below. Do not ask for filesystem access. "
-                    "Return only the final JSON object."
-                ),
-                "=== DECISION PROMPT ===\n" + prompt_text,
-                "=== DECISION PACKET.JSON ===\n" + packet_text,
-            ]
-        )
+        sections = [
+            session_text,
+            (
+                f"Current automated turn: moderator decision drafting for {round_id}.\n"
+                "The required packet content is embedded below. Do not ask for filesystem access. "
+                "Return only the final JSON object."
+            ),
+            "=== DECISION PROMPT ===\n" + prompt_text,
+            "=== DECISION PACKET.JSON ===\n" + packet_text,
+        ]
+        if history_text:
+            sections.append("=== HISTORICAL CASE CONTEXT ===\n" + history_text)
+        return "\n\n".join(sections)
 
     raise ValueError(f"Unsupported agent turn kind: {turn_kind}")
 
@@ -1525,6 +1692,7 @@ def command_init_run(args: argparse.Namespace) -> dict[str, Any]:
     )
     round_id = latest_round_id(run_dir)
     state = build_state_payload(run_dir=run_dir, round_id=round_id, agent_prefix=args.agent_prefix)
+    apply_history_cli_config(state, args)
     save_state(run_dir, state)
     return build_status_payload(run_dir, state)
 
@@ -1532,8 +1700,8 @@ def command_init_run(args: argparse.Namespace) -> dict[str, Any]:
 def command_status(args: argparse.Namespace) -> dict[str, Any]:
     run_dir = Path(args.run_dir).expanduser().resolve()
     state = load_state(run_dir)
-    refresh_supervisor_files(run_dir, state)
-    write_json(supervisor_state_path(run_dir), state, pretty=True)
+    apply_history_cli_config(state, args)
+    save_state(run_dir, state)
     return build_status_payload(run_dir, state)
 
 
@@ -1970,6 +2138,8 @@ def build_parser() -> argparse.ArgumentParser:
     init_run.add_argument("--run-dir", required=True, help="Eco-council run directory.")
     init_run.add_argument("--mission-input", required=True, help="Mission JSON file.")
     init_run.add_argument("--agent-prefix", default="", help="Optional OpenClaw agent id prefix.")
+    init_run.add_argument("--history-db", default="", help="Optional case-library SQLite path for moderator historical context.")
+    init_run.add_argument("--history-top-k", type=int, default=DEFAULT_HISTORY_TOP_K, help="Number of similar historical cases to inject into moderator turns.")
     init_run.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     provision = sub.add_parser("provision-openclaw-agents", help="Create or reuse three isolated OpenClaw agents.")
@@ -1980,6 +2150,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Show current supervisor state.")
     status.add_argument("--run-dir", required=True, help="Eco-council run directory.")
+    status.add_argument("--history-db", default="", help="Optional case-library SQLite path to attach for moderator historical context.")
+    status.add_argument("--history-top-k", type=int, default=0, help="Optional override for moderator historical-case count.")
+    status.add_argument("--disable-history-context", action="store_true", help="Disable moderator historical-case context for this run.")
     status.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     summarize = sub.add_parser("summarize-run", help="Render one human-readable run report from the run directory.")

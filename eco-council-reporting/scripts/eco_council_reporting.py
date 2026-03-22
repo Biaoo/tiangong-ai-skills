@@ -1011,6 +1011,7 @@ def build_report_draft(
 def build_report_instructions(role: str) -> list[str]:
     instructions = [
         "Return one JSON object only, shaped like expert-report.",
+        "Treat `context` as a compact summary layer first; only rely on `canonical_paths` when the summary is insufficient.",
         "Use only claim_ids, observation_ids, and evidence_ids already present in the packet context.",
         "Do not invent coordinates, timestamps, or raw-source facts outside the packet.",
         "If evidence remains partial or mixed, keep status as needs-more-evidence.",
@@ -1092,12 +1093,19 @@ def completion_score_for_round(evidence_cards: list[dict[str, Any]], reports: li
 def evidence_sufficiency_for_round(evidence_cards: list[dict[str, Any]], missing_evidence_types: list[str]) -> str:
     if not evidence_cards:
         return "insufficient"
-    verdicts = {maybe_text(item.get("verdict")) for item in evidence_cards}
-    if verdicts <= {"supports", "contradicts"} and not missing_evidence_types:
-        return "sufficient"
-    if verdicts & {"supports", "contradicts"}:
+    verdicts = [maybe_text(item.get("verdict")) for item in evidence_cards]
+    confidences = [maybe_text(item.get("confidence")) for item in evidence_cards]
+    if any(verdict in {"mixed", "insufficient", ""} for verdict in verdicts):
+        return "insufficient"
+    if missing_evidence_types:
         return "partial"
-    return "insufficient"
+    if confidences and all(confidence == "low" for confidence in confidences):
+        return "partial"
+    if len(evidence_cards) > 1 and any(confidence == "low" for confidence in confidences):
+        return "partial"
+    if set(verdicts) <= {"supports", "contradicts"}:
+        return "sufficient"
+    return "partial"
 
 
 def unresolved_claim_entries(claims: list[dict[str, Any]], evidence_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1281,6 +1289,7 @@ def build_decision_packet(
         "instructions": [
             "Return one JSON object only, shaped like council-decision.",
             "Base the decision on evidence_cards and expert-report content, not on raw fetch artifacts.",
+            "Treat `round_context` as a compact summary layer first and consult `canonical_paths` only if a summary detail is insufficient.",
             "If another round is required, add new round-task objects for next_round_id instead of editing current tasks in place.",
             "Respect mission constraints such as max_rounds and max_tasks_per_round.",
             "Only keep next_round_tasks that introduce at least one not-yet-used source skill for this run; do not repeat the same role/source bundle for the same geometry and window.",

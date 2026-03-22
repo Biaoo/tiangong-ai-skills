@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 import sqlite3
 import statistics
 import sys
@@ -28,6 +29,11 @@ CONTRACT_SCRIPT_PATH = SKILL_DIR.parent / "eco-council-data-contract" / "scripts
 
 SCHEMA_VERSION = "1.0.0"
 POINT_MATCH_EPSILON_DEGREES = 0.05
+NORMALIZE_CACHE_VERSION = "v1"
+MAX_CONTEXT_TASKS = 4
+MAX_CONTEXT_CLAIMS = 4
+MAX_CONTEXT_OBSERVATIONS = 8
+MAX_CONTEXT_EVIDENCE = 4
 PHYSICAL_CLAIM_TYPES = {
     "wildfire",
     "smoke",
@@ -188,6 +194,12 @@ def read_jsonl(path: Path) -> list[Any]:
 def write_json(path: Path, payload: Any, *, pretty: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(pretty_json(payload, pretty=pretty) + "\n", encoding="utf-8")
+
+
+def load_json_if_exists(path: Path) -> Any | None:
+    if not path.exists():
+        return None
+    return read_json(path)
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -467,6 +479,36 @@ def load_or_build_manifest(run_dir: Path, mission: dict[str, Any]) -> dict[str, 
             "environment_signals": str(default_environment_db_path(run_dir)),
         },
     }
+
+
+def normalize_cache_dir(run_dir: Path) -> Path:
+    return run_dir / "analytics" / "normalize_cache"
+
+
+def normalize_cache_path(
+    run_dir: Path,
+    *,
+    domain: str,
+    source_skill: str,
+    run_id: str,
+    round_id: str,
+    artifact_sha256: str,
+) -> Path:
+    key = stable_hash(NORMALIZE_CACHE_VERSION, domain, source_skill, run_id, round_id, artifact_sha256)
+    safe_domain = re.sub(r"[^a-z0-9_-]+", "-", domain.lower())
+    safe_source = re.sub(r"[^a-z0-9_-]+", "-", source_skill.lower())
+    return normalize_cache_dir(run_dir) / safe_domain / f"{safe_source}_{key[:16]}.json"
+
+
+def read_cache_payload(path: Path) -> dict[str, Any] | None:
+    payload = load_json_if_exists(path)
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def write_cache_payload(path: Path, payload: dict[str, Any]) -> None:
+    write_json(path, payload, pretty=False)
 
 
 def load_ddl(path: Path) -> str:
@@ -1105,6 +1147,50 @@ def normalize_public_source(
     raise ValueError(f"Unsupported public source skill: {source_skill}")
 
 
+def normalize_public_source_cached(
+    *,
+    run_dir: Path,
+    source_skill: str,
+    path: Path,
+    run_id: str,
+    round_id: str,
+) -> tuple[list[dict[str, Any]], str]:
+    artifact_sha256 = file_sha256(path)
+    cache_path = normalize_cache_path(
+        run_dir,
+        domain="public",
+        source_skill=source_skill,
+        run_id=run_id,
+        round_id=round_id,
+        artifact_sha256=artifact_sha256,
+    )
+    cached = read_cache_payload(cache_path)
+    if isinstance(cached, dict):
+        signals = cached.get("signals")
+        if (
+            cached.get("cache_version") == NORMALIZE_CACHE_VERSION
+            and cached.get("artifact_sha256") == artifact_sha256
+            and isinstance(signals, list)
+        ):
+            return [item for item in signals if isinstance(item, dict)], "hit"
+
+    signals = normalize_public_source(source_skill, path, run_id=run_id, round_id=round_id)
+    write_cache_payload(
+        cache_path,
+        {
+            "cache_version": NORMALIZE_CACHE_VERSION,
+            "domain": "public",
+            "source_skill": source_skill,
+            "run_id": run_id,
+            "round_id": round_id,
+            "artifact_path": str(path),
+            "artifact_sha256": artifact_sha256,
+            "signals": signals,
+        },
+    )
+    return signals, "miss"
+
+
 def public_signals_to_claims(
     *,
     mission: dict[str, Any],
@@ -1631,6 +1717,57 @@ def normalize_environment_source(
     return signals, extra_observations
 
 
+def normalize_environment_source_cached(
+    *,
+    run_dir: Path,
+    source_skill: str,
+    path: Path,
+    run_id: str,
+    round_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    artifact_sha256 = file_sha256(path)
+    cache_path = normalize_cache_path(
+        run_dir,
+        domain="environment",
+        source_skill=source_skill,
+        run_id=run_id,
+        round_id=round_id,
+        artifact_sha256=artifact_sha256,
+    )
+    cached = read_cache_payload(cache_path)
+    if isinstance(cached, dict):
+        signals = cached.get("signals")
+        extra_observations = cached.get("extra_observations")
+        if (
+            cached.get("cache_version") == NORMALIZE_CACHE_VERSION
+            and cached.get("artifact_sha256") == artifact_sha256
+            and isinstance(signals, list)
+            and isinstance(extra_observations, list)
+        ):
+            return (
+                [item for item in signals if isinstance(item, dict)],
+                [item for item in extra_observations if isinstance(item, dict)],
+                "hit",
+            )
+
+    signals, extra_observations = normalize_environment_source(source_skill, path, run_id=run_id, round_id=round_id)
+    write_cache_payload(
+        cache_path,
+        {
+            "cache_version": NORMALIZE_CACHE_VERSION,
+            "domain": "environment",
+            "source_skill": source_skill,
+            "run_id": run_id,
+            "round_id": round_id,
+            "artifact_path": str(path),
+            "artifact_sha256": artifact_sha256,
+            "signals": signals,
+            "extra_observations": extra_observations,
+        },
+    )
+    return signals, extra_observations, "miss"
+
+
 def observation_group_key(signal: dict[str, Any], mission_scope: dict[str, Any]) -> tuple[str, str, str]:
     metric = maybe_text(signal.get("metric"))
     source_skill = maybe_text(signal.get("source_skill"))
@@ -1850,6 +1987,121 @@ def build_evidence_summary(claim: dict[str, Any], observation_notes: list[str], 
     return f"{base}. Current evidence verdict: {verdict}."
 
 
+def compact_task(task: dict[str, Any]) -> dict[str, Any]:
+    inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+    preferred_sources = inputs.get("preferred_sources") if isinstance(inputs.get("preferred_sources"), list) else []
+    return {
+        "task_id": maybe_text(task.get("task_id")),
+        "assigned_role": maybe_text(task.get("assigned_role")),
+        "objective": truncate_text(maybe_text(task.get("objective")), 180),
+        "status": maybe_text(task.get("status")),
+        "preferred_sources": [maybe_text(item) for item in preferred_sources if maybe_text(item)][:3],
+    }
+
+
+def claim_source_skills(claim: dict[str, Any]) -> list[str]:
+    refs = claim.get("public_refs")
+    if not isinstance(refs, list):
+        return []
+    return sorted(
+        {
+            maybe_text(ref.get("source_skill"))
+            for ref in refs
+            if isinstance(ref, dict) and maybe_text(ref.get("source_skill"))
+        }
+    )
+
+
+def compact_claim(claim: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "claim_id": maybe_text(claim.get("claim_id")),
+        "claim_type": maybe_text(claim.get("claim_type")),
+        "summary": truncate_text(maybe_text(claim.get("summary")), 180),
+        "priority": claim.get("priority"),
+        "needs_physical_validation": bool(claim.get("needs_physical_validation")),
+        "public_source_skills": claim_source_skills(claim),
+    }
+
+
+def compact_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "observation_id": maybe_text(observation.get("observation_id")),
+        "source_skill": maybe_text(observation.get("source_skill")),
+        "metric": maybe_text(observation.get("metric")),
+        "aggregation": maybe_text(observation.get("aggregation")),
+        "value": observation.get("value"),
+        "unit": maybe_text(observation.get("unit")),
+        "time_window": observation.get("time_window"),
+        "quality_flags": [maybe_text(item) for item in observation.get("quality_flags", []) if maybe_text(item)][:4],
+    }
+
+
+def compact_evidence_card(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "evidence_id": maybe_text(card.get("evidence_id")),
+        "claim_id": maybe_text(card.get("claim_id")),
+        "verdict": maybe_text(card.get("verdict")),
+        "confidence": maybe_text(card.get("confidence")),
+        "summary": truncate_text(maybe_text(card.get("summary")), 220),
+        "observation_ids": [maybe_text(item) for item in card.get("observation_ids", []) if maybe_text(item)][:6],
+        "gaps": [truncate_text(maybe_text(item), 120) for item in card.get("gaps", []) if maybe_text(item)][:3],
+    }
+
+
+def ordered_context_observations(observations: list[dict[str, Any]], evidence_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {maybe_text(item.get("observation_id")): item for item in observations}
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in evidence_cards:
+        ids = card.get("observation_ids")
+        if not isinstance(ids, list):
+            continue
+        for observation_id in ids:
+            key = maybe_text(observation_id)
+            if not key or key in seen or key not in by_id:
+                continue
+            ordered.append(by_id[key])
+            seen.add(key)
+    for observation in observations:
+        key = maybe_text(observation.get("observation_id"))
+        if not key or key in seen:
+            continue
+        ordered.append(observation)
+        seen.add(key)
+    return ordered
+
+
+def build_public_signal_summary(signals: list[dict[str, Any]], claims: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "generated_at_utc": utc_now_iso(),
+        "signal_count": len(signals),
+        "claim_count": len(claims),
+        "source_skill_counts": dict(Counter(maybe_text(item.get("source_skill")) for item in signals)),
+        "signal_kind_counts": dict(Counter(maybe_text(item.get("signal_kind")) for item in signals)),
+        "top_signals": [
+            {
+                "signal_id": maybe_text(item.get("signal_id")),
+                "source_skill": maybe_text(item.get("source_skill")),
+                "title": truncate_text(maybe_text(item.get("title")), 120),
+                "published_at_utc": maybe_text(item.get("published_at_utc")),
+            }
+            for item in signals[:5]
+        ],
+        "claims": [compact_claim(item) for item in claims[:MAX_CONTEXT_CLAIMS]],
+    }
+
+
+def build_environment_signal_summary(signals: list[dict[str, Any]], observations: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "generated_at_utc": utc_now_iso(),
+        "signal_count": len(signals),
+        "observation_count": len(observations),
+        "source_skill_counts": dict(Counter(maybe_text(item.get("source_skill")) for item in signals)),
+        "metric_counts": dict(Counter(maybe_text(item.get("metric")) for item in signals)),
+        "top_observations": [compact_observation(item) for item in observations[:MAX_CONTEXT_OBSERVATIONS]],
+    }
+
+
 def link_claims_to_evidence(
     *,
     claims: list[dict[str, Any]],
@@ -1925,6 +2177,7 @@ def link_claims_to_evidence(
 
 def build_round_snapshot(
     *,
+    run_dir: Path,
     mission: dict[str, Any],
     round_id: str,
     tasks: list[dict[str, Any]],
@@ -1966,7 +2219,15 @@ def build_round_snapshot(
     if role == "environmentalist":
         focus["metrics_requested"] = sorted({observation["metric"] for observation in observations})
 
+    compact_claims_list = [compact_claim(item) for item in focus_claims[:MAX_CONTEXT_CLAIMS]]
+    compact_evidence = [compact_evidence_card(item) for item in evidence_cards[:MAX_CONTEXT_EVIDENCE]]
+    compact_observations = [
+        compact_observation(item)
+        for item in ordered_context_observations(observations, evidence_cards)[:MAX_CONTEXT_OBSERVATIONS]
+    ]
+
     return {
+        "context_layer": "compact-v1",
         "run": run,
         "dataset": dataset,
         "aggregates": {
@@ -1974,11 +2235,17 @@ def build_round_snapshot(
             "observation_metric_counts": dict(Counter(maybe_text(item.get("metric")) for item in observations)),
             "evidence_verdict_counts": dict(verdict_counter),
         },
-        "tasks": role_tasks,
+        "canonical_paths": {
+            "tasks": str(round_dir(run_dir, round_id) / "moderator" / "tasks.json"),
+            "claims": str(shared_claims_path(run_dir, round_id)),
+            "observations": str(shared_observations_path(run_dir, round_id)),
+            "evidence_cards": str(shared_evidence_path(run_dir, round_id)),
+        },
+        "tasks": [compact_task(item) for item in role_tasks[:MAX_CONTEXT_TASKS]],
         "focus": focus,
-        "claims": focus_claims,
-        "observations": observations,
-        "evidence_cards": evidence_cards,
+        "claims": compact_claims_list,
+        "observations": compact_observations,
+        "evidence_cards": compact_evidence,
     }
 
 
@@ -2004,6 +2271,10 @@ def command_init_run(args: argparse.Namespace) -> dict[str, Any]:
         "public_signals": str(public_db),
         "environment_signals": str(environment_db),
     }
+    manifest["normalization_cache"] = {
+        "version": NORMALIZE_CACHE_VERSION,
+        "directory": str(normalize_cache_dir(run_dir_path)),
+    }
     manifest["initialized_at_utc"] = utc_now_iso()
     write_json(run_manifest_path(run_dir_path), manifest, pretty=args.pretty)
 
@@ -2022,8 +2293,21 @@ def command_normalize_public(args: argparse.Namespace) -> dict[str, Any]:
     public_db = Path(args.public_db).expanduser().resolve() if args.public_db else default_public_db_path(run_dir_path)
     inputs = parse_input_specs(args.input)
     all_signals: list[dict[str, Any]] = []
+    cache_hits = 0
+    cache_misses = 0
     for source_skill, path in inputs:
-        all_signals.extend(normalize_public_source(source_skill, path, run_id=run_id, round_id=args.round_id))
+        signals, cache_status = normalize_public_source_cached(
+            run_dir=run_dir_path,
+            source_skill=source_skill,
+            path=path,
+            run_id=run_id,
+            round_id=args.round_id,
+        )
+        all_signals.extend(signals)
+        if cache_status == "hit":
+            cache_hits += 1
+        else:
+            cache_misses += 1
 
     deduped_by_id: dict[str, dict[str, Any]] = {signal["signal_id"]: signal for signal in all_signals}
     signals = sorted(
@@ -2045,15 +2329,20 @@ def command_normalize_public(args: argparse.Namespace) -> dict[str, Any]:
     normalized_dir = role_normalized_dir(run_dir_path, args.round_id, "sociologist")
     public_signals_file = normalized_dir / "public_signals.jsonl"
     claims_file = normalized_dir / "claim_candidates.json"
+    summary_file = normalized_dir / "public_signal_summary.json"
     write_jsonl(public_signals_file, signals)
     write_json(claims_file, claims, pretty=args.pretty)
+    write_json(summary_file, build_public_signal_summary(signals, claims), pretty=args.pretty)
     write_json(shared_claims_path(run_dir_path, args.round_id), claims, pretty=args.pretty)
 
     return {
         "public_db": str(public_db),
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
         "signal_count": len(signals),
         "claim_count": len(claims),
         "signals_path": str(public_signals_file),
+        "signal_summary_path": str(summary_file),
         "claims_path": str(claims_file),
         "shared_claims_path": str(shared_claims_path(run_dir_path, args.round_id)),
     }
@@ -2071,15 +2360,22 @@ def command_normalize_environment(args: argparse.Namespace) -> dict[str, Any]:
     inputs = parse_input_specs(args.input)
     all_signals: list[dict[str, Any]] = []
     extra_observations: list[dict[str, Any]] = []
+    cache_hits = 0
+    cache_misses = 0
     for source_skill, path in inputs:
-        source_signals, source_observations = normalize_environment_source(
-            source_skill,
-            path,
+        source_signals, source_observations, cache_status = normalize_environment_source_cached(
+            run_dir=run_dir_path,
+            source_skill=source_skill,
+            path=path,
             run_id=run_id,
             round_id=args.round_id,
         )
         all_signals.extend(source_signals)
         extra_observations.extend(source_observations)
+        if cache_status == "hit":
+            cache_hits += 1
+        else:
+            cache_misses += 1
 
     deduped_by_id: dict[str, dict[str, Any]] = {signal["signal_id"]: signal for signal in all_signals}
     signals = sorted(deduped_by_id.values(), key=lambda item: (item.get("metric") or "", item["signal_id"]))
@@ -2094,15 +2390,20 @@ def command_normalize_environment(args: argparse.Namespace) -> dict[str, Any]:
     normalized_dir = role_normalized_dir(run_dir_path, args.round_id, "environmentalist")
     signals_file = normalized_dir / "environment_signals.jsonl"
     observations_file = normalized_dir / "observations.json"
+    summary_file = normalized_dir / "environment_signal_summary.json"
     write_jsonl(signals_file, signals)
     write_json(observations_file, observations, pretty=args.pretty)
+    write_json(summary_file, build_environment_signal_summary(signals, observations), pretty=args.pretty)
     write_json(shared_observations_path(run_dir_path, args.round_id), observations, pretty=args.pretty)
 
     return {
         "environment_db": str(environment_db),
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
         "signal_count": len(signals),
         "observation_count": len(observations),
         "signals_path": str(signals_file),
+        "signal_summary_path": str(summary_file),
         "observations_path": str(observations_file),
         "shared_observations_path": str(shared_observations_path(run_dir_path, args.round_id)),
     }
@@ -2138,6 +2439,7 @@ def command_build_round_context(args: argparse.Namespace) -> dict[str, Any]:
     outputs: dict[str, str] = {}
     for role in ("moderator", "sociologist", "environmentalist"):
         payload = build_round_snapshot(
+            run_dir=run_dir_path,
             mission=mission,
             round_id=args.round_id,
             tasks=tasks,
@@ -2151,6 +2453,7 @@ def command_build_round_context(args: argparse.Namespace) -> dict[str, Any]:
         outputs[role] = str(context_path)
 
     snapshot = build_round_snapshot(
+        run_dir=run_dir_path,
         mission=mission,
         round_id=args.round_id,
         tasks=tasks,

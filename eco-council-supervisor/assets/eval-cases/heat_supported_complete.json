@@ -1,0 +1,237 @@
+{
+  "case_id": "heat_supported_complete",
+  "description": "Heat claim is sufficiently supported and should close without another round.",
+  "round_id": "round-001",
+  "mission": {
+    "schema_version": "1.0.0",
+    "run_id": "eval-heat-supported-complete",
+    "topic": "Heat verification replay",
+    "objective": "Check that a supported heat claim closes cleanly.",
+    "window": {
+      "start_utc": "2026-07-01T00:00:00Z",
+      "end_utc": "2026-07-02T23:59:59Z"
+    },
+    "region": {
+      "label": "Phoenix, Arizona, USA",
+      "geometry": {
+        "type": "Point",
+        "latitude": 33.4484,
+        "longitude": -112.074
+      }
+    },
+    "hypotheses": [
+      "Heat concern in public discussion aligns with measured thermal extremes."
+    ],
+    "constraints": {
+      "max_rounds": 3,
+      "max_claims_per_round": 3,
+      "max_tasks_per_round": 4
+    },
+    "source_policy": {
+      "sociologist": [
+        "gdelt-doc-search",
+        "bluesky-cascade-fetch"
+      ],
+      "environmentalist": [
+        "open-meteo-historical-fetch"
+      ],
+      "historian": []
+    }
+  },
+  "tasks": [
+    {
+      "schema_version": "1.0.0",
+      "task_id": "task-sociologist-round-001-01",
+      "run_id": "eval-heat-supported-complete",
+      "round_id": "round-001",
+      "assigned_role": "sociologist",
+      "objective": "Collect public heat concern artifacts for Phoenix during the mission window.",
+      "status": "planned",
+      "depends_on": [],
+      "expected_output_kinds": [
+        "claim",
+        "expert-report"
+      ],
+      "inputs": {
+        "mission_geometry": {
+          "type": "Point",
+          "latitude": 33.4484,
+          "longitude": -112.074
+        },
+        "mission_window": {
+          "start_utc": "2026-07-01T00:00:00Z",
+          "end_utc": "2026-07-02T23:59:59Z"
+        },
+        "preferred_sources": [
+          "gdelt-doc-search",
+          "bluesky-cascade-fetch"
+        ]
+      },
+      "notes": "Replay fixture."
+    },
+    {
+      "schema_version": "1.0.0",
+      "task_id": "task-environmentalist-round-001-01",
+      "run_id": "eval-heat-supported-complete",
+      "round_id": "round-001",
+      "assigned_role": "environmentalist",
+      "objective": "Collect temperature observations for Phoenix during the mission window.",
+      "status": "planned",
+      "depends_on": [],
+      "expected_output_kinds": [
+        "observation",
+        "expert-report"
+      ],
+      "inputs": {
+        "mission_geometry": {
+          "type": "Point",
+          "latitude": 33.4484,
+          "longitude": -112.074
+        },
+        "mission_window": {
+          "start_utc": "2026-07-01T00:00:00Z",
+          "end_utc": "2026-07-02T23:59:59Z"
+        },
+        "preferred_sources": [
+          "open-meteo-historical-fetch"
+        ]
+      },
+      "notes": "Replay fixture."
+    }
+  ],
+  "claims": [
+    {
+      "schema_version": "1.0.0",
+      "claim_id": "claim-001",
+      "run_id": "eval-heat-supported-complete",
+      "round_id": "round-001",
+      "agent_role": "sociologist",
+      "claim_type": "heat",
+      "status": "candidate",
+      "summary": "Public reports say Phoenix heat was extreme during the mission window.",
+      "statement": "Mission-window public discussion reports unusually intense heat in Phoenix.",
+      "priority": 1,
+      "needs_physical_validation": true,
+      "time_window": {
+        "start_utc": "2026-07-01T00:00:00Z",
+        "end_utc": "2026-07-02T23:59:59Z"
+      },
+      "place_scope": {
+        "label": "Phoenix, Arizona, USA",
+        "geometry": {
+          "type": "Point",
+          "latitude": 33.4484,
+          "longitude": -112.074
+        }
+      },
+      "public_refs": [
+        {
+          "source_skill": "gdelt-doc-search",
+          "artifact_path": "runs/replay/raw/gdelt-doc-search.json",
+          "record_locator": "$.articles[0]",
+          "external_id": "gdelt-heat-001"
+        },
+        {
+          "source_skill": "bluesky-cascade-fetch",
+          "artifact_path": "runs/replay/raw/bluesky-cascade-fetch.json",
+          "record_locator": "$.posts[0]",
+          "external_id": "bsky-heat-001"
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "schema_version": "1.0.0",
+      "observation_id": "obs-001",
+      "run_id": "eval-heat-supported-complete",
+      "round_id": "round-001",
+      "agent_role": "environmentalist",
+      "source_skill": "open-meteo-historical-fetch",
+      "metric": "temperature_2m",
+      "aggregation": "window-summary",
+      "value": 40.5,
+      "unit": "C",
+      "statistics": {
+        "min": 36.0,
+        "max": 43.0,
+        "mean": 40.5,
+        "p95": 42.5
+      },
+      "time_window": {
+        "start_utc": "2026-07-01T00:00:00Z",
+        "end_utc": "2026-07-02T23:59:59Z"
+      },
+      "place_scope": {
+        "label": "Phoenix, Arizona, USA",
+        "geometry": {
+          "type": "Point",
+          "latitude": 33.4484,
+          "longitude": -112.074
+        }
+      },
+      "quality_flags": [],
+      "provenance": {
+        "source_skill": "open-meteo-historical-fetch",
+        "artifact_path": "runs/replay/raw/open-meteo-historical-fetch.json",
+        "record_locator": "$.daily[0]"
+      }
+    }
+  ],
+  "evidence_cards": [
+    {
+      "schema_version": "1.0.0",
+      "evidence_id": "evidence-001",
+      "run_id": "eval-heat-supported-complete",
+      "round_id": "round-001",
+      "claim_id": "claim-001",
+      "verdict": "supports",
+      "confidence": "high",
+      "summary": "Temperature observations support the mission-window heat claim.",
+      "public_refs": [
+        {
+          "source_skill": "gdelt-doc-search",
+          "artifact_path": "runs/replay/raw/gdelt-doc-search.json",
+          "record_locator": "$.articles[0]"
+        }
+      ],
+      "observation_ids": [
+        "obs-001"
+      ],
+      "gaps": []
+    }
+  ],
+  "fetch_statuses": [
+    {
+      "step_id": "step-sociologist-01-gdelt-doc-search",
+      "assigned_role": "sociologist",
+      "source_skill": "gdelt-doc-search",
+      "status": "completed"
+    },
+    {
+      "step_id": "step-sociologist-02-bluesky-cascade-fetch",
+      "assigned_role": "sociologist",
+      "source_skill": "bluesky-cascade-fetch",
+      "status": "completed"
+    },
+    {
+      "step_id": "step-environmentalist-01-open-meteo-historical-fetch",
+      "assigned_role": "environmentalist",
+      "source_skill": "open-meteo-historical-fetch",
+      "status": "completed"
+    }
+  ],
+  "expect": {
+    "decision": {
+      "moderator_status": "complete",
+      "next_round_required": false,
+      "evidence_sufficiency": "sufficient",
+      "missing_evidence_types": []
+    },
+    "context": {
+      "context_layer": "compact-v1",
+      "max_observations": 8,
+      "max_claims": 4
+    }
+  }
+}
