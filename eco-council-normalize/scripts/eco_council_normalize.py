@@ -370,12 +370,60 @@ def stable_hash(*parts: Any) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
+def stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def parse_round_components(round_id: str) -> tuple[str, int, int] | None:
+    match = re.match(r"^(.*?)(\d+)$", maybe_text(round_id))
+    if match is None:
+        return None
+    prefix, digits = match.groups()
+    return prefix, int(digits), len(digits)
+
+
+def round_sort_key(round_id: str) -> tuple[str, int, str]:
+    components = parse_round_components(round_id)
+    if components is None:
+        return (round_id, 10**9, round_id)
+    prefix, number, _width = components
+    return (prefix, number, round_id)
+
+
 def round_directory_name(round_id: str) -> str:
     return round_id.replace("-", "_")
 
 
 def round_dir(run_dir: Path, round_id: str) -> Path:
     return run_dir / round_directory_name(round_id)
+
+
+def discover_round_ids(run_dir: Path) -> list[str]:
+    round_ids: list[str] = []
+    for child in run_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if not child.name.startswith("round_"):
+            continue
+        round_ids.append(child.name.replace("_", "-"))
+    return sorted(dict.fromkeys(round_ids), key=round_sort_key)
+
+
+def previous_round_id(run_dir: Path, round_id: str) -> str | None:
+    components = parse_round_components(round_id)
+    if components is None:
+        candidates = [item for item in discover_round_ids(run_dir) if item < round_id]
+        return candidates[-1] if candidates else None
+    prefix, number, _width = components
+    candidates: list[str] = []
+    for item in discover_round_ids(run_dir):
+        item_components = parse_round_components(item)
+        if item_components is None:
+            continue
+        item_prefix, item_number, _item_width = item_components
+        if item_prefix == prefix and item_number < number:
+            candidates.append(item)
+    return candidates[-1] if candidates else None
 
 
 def mission_path(run_dir: Path) -> Path:
@@ -776,6 +824,10 @@ def collect_records(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def strip_simple_html(value: str) -> str:
+    return normalize_space(re.sub(r"<[^>]+>", " ", value))
+
+
 def normalize_public_from_youtube_videos(
     path: Path,
     payload: Any,
@@ -1039,6 +1091,77 @@ def normalize_public_from_reggov(
     return signals
 
 
+def normalize_public_from_federal_register(
+    path: Path,
+    payload: Any,
+    *,
+    run_id: str,
+    round_id: str,
+    source_skill: str,
+    sha256_value: str,
+) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    query_text = ""
+    if isinstance(payload, dict):
+        request_obj = payload.get("request")
+        if isinstance(request_obj, dict):
+            query_text = maybe_text(request_obj.get("term") or request_obj.get("search_term"))
+    for index, record in enumerate(collect_records(payload)):
+        agencies = record.get("agencies") if isinstance(record.get("agencies"), list) else []
+        agency_names = [
+            maybe_text(item.get("name") or item.get("raw_name") or item.get("slug"))
+            for item in agencies
+            if isinstance(item, dict) and maybe_text(item.get("name") or item.get("raw_name") or item.get("slug"))
+        ]
+        agency_slugs = [
+            maybe_text(item.get("slug"))
+            for item in agencies
+            if isinstance(item, dict) and maybe_text(item.get("slug"))
+        ]
+        title = maybe_text(record.get("title"))
+        abstract = maybe_text(record.get("abstract"))
+        excerpts = strip_simple_html(maybe_text(record.get("excerpts")))
+        text = abstract or excerpts or title
+        signals.append(
+            make_public_signal(
+                run_id=run_id,
+                round_id=round_id,
+                source_skill=source_skill,
+                signal_kind="policy-document",
+                external_id=maybe_text(record.get("document_number") or record.get("html_url") or index),
+                title=title or maybe_text(record.get("document_number")) or "Federal Register document",
+                text=text,
+                url=maybe_text(record.get("html_url") or record.get("pdf_url")),
+                author_name="",
+                channel_name=", ".join(agency_names),
+                language="",
+                query_text=query_text,
+                published_at_utc=to_rfc3339_z(parse_loose_datetime(record.get("publication_date"))),
+                engagement={},
+                metadata={
+                    "type": maybe_text(record.get("type")),
+                    "document_number": maybe_text(record.get("document_number")),
+                    "pdf_url": maybe_text(record.get("pdf_url")),
+                    "public_inspection_pdf_url": maybe_text(record.get("public_inspection_pdf_url")),
+                    "agencies": agency_names,
+                    "agency_slugs": agency_slugs,
+                    "topics": record.get("topics") if isinstance(record.get("topics"), list) else [],
+                    "docket_ids": record.get("docket_ids") if isinstance(record.get("docket_ids"), list) else [],
+                    "regulation_id_numbers": record.get("regulation_id_numbers") if isinstance(record.get("regulation_id_numbers"), list) else [],
+                    "significant": record.get("significant"),
+                    "comment_url": maybe_text(record.get("comment_url")),
+                    "raw_text_url": maybe_text(record.get("raw_text_url")),
+                    "source_page_number": record.get("source_page_number"),
+                },
+                artifact_path=path,
+                record_locator=f"$.results[{index}]",
+                sha256_value=sha256_value,
+                raw_obj=record,
+            )
+        )
+    return signals
+
+
 def normalize_public_from_gdelt_doc(
     path: Path,
     payload: Any,
@@ -1187,6 +1310,15 @@ def normalize_public_source(
         return normalize_public_from_youtube_comments(path, payload, run_id=run_id, round_id=round_id, sha256_value=sha256_value)
     if source_skill == "bluesky-cascade-fetch":
         return normalize_public_from_bluesky(path, payload, run_id=run_id, round_id=round_id, sha256_value=sha256_value)
+    if source_skill in {"federal-register-doc-search", "federal-register-documents-fetch"}:
+        return normalize_public_from_federal_register(
+            path,
+            payload,
+            run_id=run_id,
+            round_id=round_id,
+            source_skill=source_skill,
+            sha256_value=sha256_value,
+        )
     if source_skill in {"regulationsgov-comments-fetch", "regulationsgov-comment-detail-fetch"}:
         return normalize_public_from_reggov(
             path,
@@ -2173,6 +2305,73 @@ def load_canonical_list(path: Path) -> list[dict[str, Any]]:
     return [item for item in payload if isinstance(item, dict)]
 
 
+def observation_signature_payload(observation: dict[str, Any]) -> dict[str, Any]:
+    provenance = observation.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    return {
+        "source_skill": maybe_text(observation.get("source_skill")),
+        "metric": maybe_text(observation.get("metric")),
+        "aggregation": maybe_text(observation.get("aggregation")),
+        "value": observation.get("value"),
+        "unit": maybe_text(observation.get("unit")),
+        "statistics": observation.get("statistics"),
+        "time_window": observation.get("time_window"),
+        "place_scope": observation.get("place_scope"),
+        "quality_flags": sorted(
+            maybe_text(item) for item in observation.get("quality_flags", []) if maybe_text(item)
+        ),
+        "provenance": {
+            "source_skill": maybe_text(provenance.get("source_skill")),
+            "record_locator": maybe_text(provenance.get("record_locator")),
+            "external_id": maybe_text(provenance.get("external_id")),
+            "sha256": maybe_text(provenance.get("sha256")),
+        },
+    }
+
+
+def shared_observation_id(observation: dict[str, Any]) -> str:
+    signature = stable_hash(stable_json(observation_signature_payload(observation)))
+    return f"obs-{signature[:12]}"
+
+
+def materialize_shared_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    item = dict(observation)
+    item["observation_id"] = shared_observation_id(observation)
+    return item
+
+
+def merge_effective_observations(*observation_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged_by_signature: dict[str, dict[str, Any]] = {}
+    ordered_signatures: list[str] = []
+    for group in observation_groups:
+        for observation in group:
+            signature_payload = observation_signature_payload(observation)
+            signature = stable_hash(stable_json(signature_payload))
+            if signature not in merged_by_signature:
+                ordered_signatures.append(signature)
+            merged_by_signature[signature] = materialize_shared_observation(observation)
+    return [merged_by_signature[signature] for signature in ordered_signatures]
+
+
+def effective_shared_observations(
+    run_dir: Path,
+    round_id: str,
+    *,
+    current_round_observations: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    inherited: list[dict[str, Any]] = []
+    prior_round_id = previous_round_id(run_dir, round_id)
+    if prior_round_id is not None:
+        inherited = effective_shared_observations(run_dir, prior_round_id)
+    current = (
+        current_round_observations
+        if current_round_observations is not None
+        else load_canonical_list(shared_observations_path(run_dir, round_id))
+    )
+    return merge_effective_observations(inherited, current)
+
+
 def metric_relevant(claim_type: str, metric: str) -> bool:
     metric = canonical_environment_metric(metric)
     if claim_type not in CLAIM_METRIC_RULES:
@@ -2632,10 +2831,15 @@ def command_normalize_environment(args: argparse.Namespace) -> dict[str, Any]:
     signals_file = normalized_dir / "environment_signals.jsonl"
     observations_file = normalized_dir / "observations.json"
     summary_file = normalized_dir / "environment_signal_summary.json"
+    shared_observations = effective_shared_observations(
+        run_dir_path,
+        args.round_id,
+        current_round_observations=observations,
+    )
     write_jsonl(signals_file, signals)
     write_json(observations_file, observations, pretty=args.pretty)
     write_json(summary_file, build_environment_signal_summary(signals, observations), pretty=args.pretty)
-    write_json(shared_observations_path(run_dir_path, args.round_id), observations, pretty=args.pretty)
+    write_json(shared_observations_path(run_dir_path, args.round_id), shared_observations, pretty=args.pretty)
 
     return {
         "environment_db": str(environment_db),
@@ -2643,6 +2847,7 @@ def command_normalize_environment(args: argparse.Namespace) -> dict[str, Any]:
         "cache_misses": cache_misses,
         "signal_count": len(signals),
         "observation_count": len(observations),
+        "shared_observation_count": len(shared_observations),
         "signals_path": str(signals_file),
         "signal_summary_path": str(summary_file),
         "observations_path": str(observations_file),
@@ -2653,7 +2858,7 @@ def command_normalize_environment(args: argparse.Namespace) -> dict[str, Any]:
 def command_link_evidence(args: argparse.Namespace) -> dict[str, Any]:
     run_dir_path = Path(args.run_dir).expanduser().resolve()
     claims = load_canonical_list(shared_claims_path(run_dir_path, args.round_id))
-    observations = load_canonical_list(shared_observations_path(run_dir_path, args.round_id))
+    observations = effective_shared_observations(run_dir_path, args.round_id)
     evidence_cards = link_claims_to_evidence(claims=claims, observations=observations)
 
     normalized_dir = role_normalized_dir(run_dir_path, args.round_id, "environmentalist")
@@ -2674,7 +2879,7 @@ def command_build_round_context(args: argparse.Namespace) -> dict[str, Any]:
     tasks_path = round_dir(run_dir_path, args.round_id) / "moderator" / "tasks.json"
     tasks = load_canonical_list(tasks_path)
     claims = load_canonical_list(shared_claims_path(run_dir_path, args.round_id))
-    observations = load_canonical_list(shared_observations_path(run_dir_path, args.round_id))
+    observations = effective_shared_observations(run_dir_path, args.round_id)
     evidence_cards = load_canonical_list(shared_evidence_path(run_dir_path, args.round_id))
 
     outputs: dict[str, str] = {}

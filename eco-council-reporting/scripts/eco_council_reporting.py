@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -45,11 +46,23 @@ QUESTION_RULES = (
     ("no mission-aligned observations matched", "Should the next round expand physical coverage or narrow claim scope so observations can be matched?"),
 )
 NEXT_ACTION_LIBRARY: dict[str, dict[str, Any]] = {
+    "normalized-public-claims": {
+        "assigned_role": "sociologist",
+        "objective": "Collect and normalize concrete mission-window public claims from approved news and discussion sources.",
+        "reason": "The round did not produce enough normalized public claims to assess public concern, event severity, or attribution narratives.",
+        "preferred_sources": ["gdelt-doc-search", "youtube-video-search", "youtube-comments-fetch", "bluesky-cascade-fetch"],
+    },
+    "evidence-cards-linking-public-claims-to-physical-observations": {
+        "assigned_role": "sociologist",
+        "objective": "Recover more attributable public claims that can be linked directly against the available physical observations.",
+        "reason": "Public-side evidence needs more concrete and attributable claim phrasing before physical evidence cards can be linked reliably.",
+        "preferred_sources": ["gdelt-doc-search", "youtube-video-search", "youtube-comments-fetch"],
+    },
     "station-air-quality": {
         "assigned_role": "environmentalist",
         "objective": "Fetch station-based air-quality corroboration for the same mission window and geometry.",
         "reason": "Station-grade corroboration remains incomplete or modeled fields still need cross-checking.",
-        "preferred_sources": ["openaq-data-fetch"],
+        "preferred_sources": ["openaq-data-fetch", "airnow-hourly-obs-fetch"],
     },
     "fire-detection": {
         "assigned_role": "environmentalist",
@@ -104,7 +117,12 @@ SOURCE_KEYWORDS = (
     ("youtube videos", ["youtube-video-search"]),
     ("youtube video", ["youtube-video-search"]),
     ("public discussion", ["gdelt-doc-search", "bluesky-cascade-fetch", "youtube-video-search"]),
+    ("news and social", ["gdelt-doc-search", "youtube-video-search", "bluesky-cascade-fetch"]),
+    ("news and discussion", ["gdelt-doc-search", "youtube-video-search", "bluesky-cascade-fetch"]),
+    ("public claims", ["gdelt-doc-search", "youtube-video-search"]),
+    ("public claim", ["gdelt-doc-search", "youtube-video-search"]),
     ("air quality", ["openaq-data-fetch", "open-meteo-air-quality-fetch"]),
+    ("airnow", ["airnow-hourly-obs-fetch"]),
     ("openaq", ["openaq-data-fetch"]),
     ("station", ["openaq-data-fetch"]),
     ("firms", ["nasa-firms-fire-fetch"]),
@@ -123,6 +141,10 @@ SOURCE_KEYWORDS = (
     ("flood", ["usgs-water-iv-fetch", "open-meteo-flood-fetch", "open-meteo-historical-fetch"]),
     ("temperature", ["open-meteo-historical-fetch"]),
     ("heat", ["open-meteo-historical-fetch"]),
+    ("federal register", ["federal-register-doc-search"]),
+    ("rulemaking", ["federal-register-doc-search", "regulationsgov-comments-fetch"]),
+    ("proposed rule", ["federal-register-doc-search"]),
+    ("final rule", ["federal-register-doc-search"]),
     ("regulations", ["regulationsgov-comments-fetch", "regulationsgov-comment-detail-fetch"]),
     ("docket", ["regulationsgov-comments-fetch", "regulationsgov-comment-detail-fetch"]),
     ("comment", ["regulationsgov-comments-fetch", "regulationsgov-comment-detail-fetch"]),
@@ -205,6 +227,15 @@ def load_canonical_list(path: Path) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         raise ValueError(f"Expected list in {path}")
     return [item for item in payload if isinstance(item, dict)]
+
+
+def stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def stable_hash(*parts: Any) -> str:
+    joined = "||".join(maybe_text(part) for part in parts)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def unique_strings(values: list[str]) -> list[str]:
@@ -441,6 +472,55 @@ def round_ids_through(run_dir: Path, round_id: str) -> list[str]:
     return selected
 
 
+def observation_signature_payload(observation: dict[str, Any]) -> dict[str, Any]:
+    provenance = observation.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    return {
+        "source_skill": maybe_text(observation.get("source_skill")),
+        "metric": maybe_text(observation.get("metric")),
+        "aggregation": maybe_text(observation.get("aggregation")),
+        "value": observation.get("value"),
+        "unit": maybe_text(observation.get("unit")),
+        "statistics": observation.get("statistics"),
+        "time_window": observation.get("time_window"),
+        "place_scope": observation.get("place_scope"),
+        "quality_flags": sorted(
+            maybe_text(item) for item in observation.get("quality_flags", []) if maybe_text(item)
+        ),
+        "provenance": {
+            "source_skill": maybe_text(provenance.get("source_skill")),
+            "record_locator": maybe_text(provenance.get("record_locator")),
+            "external_id": maybe_text(provenance.get("external_id")),
+            "sha256": maybe_text(provenance.get("sha256")),
+        },
+    }
+
+
+def shared_observation_id(observation: dict[str, Any]) -> str:
+    signature = stable_hash(stable_json(observation_signature_payload(observation)))
+    return f"obs-{signature[:12]}"
+
+
+def materialize_shared_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    item = dict(observation)
+    item["observation_id"] = shared_observation_id(observation)
+    return item
+
+
+def effective_shared_observations(run_dir: Path, round_id: str) -> list[dict[str, Any]]:
+    merged_by_signature: dict[str, dict[str, Any]] = {}
+    ordered_signatures: list[str] = []
+    for observed_round_id in round_ids_through(run_dir, round_id):
+        for observation in load_canonical_list(shared_observations_path(run_dir, observed_round_id)):
+            signature_payload = observation_signature_payload(observation)
+            signature = stable_hash(stable_json(signature_payload))
+            if signature not in merged_by_signature:
+                ordered_signatures.append(signature)
+            merged_by_signature[signature] = materialize_shared_observation(observation)
+    return [merged_by_signature[signature] for signature in ordered_signatures]
+
+
 def fetch_status_role(status: dict[str, Any]) -> str:
     role = maybe_text(status.get("assigned_role"))
     if role:
@@ -639,6 +719,11 @@ def infer_missing_evidence_types(*, claims: list[dict[str, Any]], observations: 
             unresolved_claims.append(claim)
 
     missing: set[str] = set()
+    if not claims:
+        missing.add("normalized-public-claims")
+    if observations and (not claims or (claims and not evidence_cards)):
+        missing.add("evidence-cards-linking-public-claims-to-physical-observations")
+
     for card in evidence_cards:
         gaps = card.get("gaps")
         if not isinstance(gaps, list):
@@ -744,6 +829,34 @@ def novel_sources(sources: list[str], completed_sources: set[str]) -> list[str]:
     return [item for item in unique_strings(sources) if item not in completed_sources]
 
 
+def select_sources_with_novelty(
+    *,
+    candidates: list[str],
+    completed_sources: set[str],
+) -> list[str]:
+    ordered = unique_strings(candidates)
+    novel = {item for item in ordered if item not in completed_sources}
+    if not novel:
+        return []
+
+    selected: list[str] = []
+    for index, source in enumerate(ordered):
+        if len(selected) >= MAX_SOURCES_PER_NEXT_TASK:
+            break
+        if source in novel:
+            selected.append(source)
+            continue
+        remaining = [item for item in ordered[index + 1 :] if item not in selected]
+        remaining_novel = any(item in novel for item in remaining)
+        remaining_slots_after_pick = MAX_SOURCES_PER_NEXT_TASK - len(selected) - 1
+        if remaining_novel and remaining_slots_after_pick >= 1:
+            selected.append(source)
+
+    if not any(item in novel for item in selected):
+        return []
+    return selected
+
+
 def recommendation_key(recommendation: dict[str, Any]) -> tuple[str, str]:
     return (maybe_text(recommendation.get("assigned_role")), maybe_text(recommendation.get("objective")).lower())
 
@@ -810,7 +923,14 @@ def select_task_sources(
             role,
             expand_source_dependencies(preferred_candidates),
         )
-    return novel_sources(preferred_candidates, completed_sources)[:MAX_SOURCES_PER_NEXT_TASK]
+    if not novel_sources(preferred_candidates, completed_sources):
+        policy_candidates = filter_sources_for_role(
+            mission,
+            role,
+            expand_source_dependencies(mission_source_policy(mission, role)),
+        )
+        preferred_candidates = unique_strings(preferred_candidates + policy_candidates)
+    return select_sources_with_novelty(candidates=preferred_candidates, completed_sources=completed_sources)
 
 
 def build_task_notes(current_round_id: str, reason: str, novelty_sources: list[str]) -> str:
@@ -1395,7 +1515,7 @@ def build_decision_packet(
             "Treat `round_context` as a compact summary layer first and consult `canonical_paths` only if a summary detail is insufficient.",
             "If another round is required, add new round-task objects for next_round_id instead of editing current tasks in place.",
             "Respect mission constraints such as max_rounds and max_tasks_per_round.",
-            "Only keep next_round_tasks that introduce at least one not-yet-used source skill for this run; do not repeat the same role/source bundle for the same geometry and window.",
+            "Each next_round task must introduce at least one not-yet-used source skill or materially different collection angle; previously useful sources may remain as supporting context, but do not repeat an identical role/source bundle for the same geometry and window.",
             "Keep final_brief empty unless the council is complete or blocked.",
         ],
         "validation": {
@@ -1460,7 +1580,7 @@ def decision_prompt_text(*, packet_path: Path, packet: dict[str, Any]) -> str:
         "1. Treat packet `instructions` as binding.",
         "2. Review `round_context`, `reports`, `unresolved_claims`, and `proposed_next_round_tasks` before editing.",
         "3. Start from `draft_decision` inside the packet.",
-        "4. Do not invent another round if that would only repeat previously completed collection sources without a new evidence angle.",
+        "4. If another round is needed, make sure each task adds at least one new source skill or materially different collection angle; previously useful sources may still appear as supporting context.",
         "5. Return only one JSON object shaped like council-decision.",
         "6. Keep `schema_version`, `run_id`, and `round_id` consistent with the packet.",
         "7. Do not return markdown, prose, code fences, or extra commentary.",
@@ -1584,7 +1704,7 @@ def collect_round_state(run_dir: Path, round_id: str) -> tuple[dict[str, Any], l
     mission = load_mission(run_dir)
     tasks = load_canonical_list(tasks_path(run_dir, round_id))
     claims = load_canonical_list(shared_claims_path(run_dir, round_id))
-    observations = load_canonical_list(shared_observations_path(run_dir, round_id))
+    observations = effective_shared_observations(run_dir, round_id)
     evidence_cards = load_canonical_list(shared_evidence_path(run_dir, round_id))
     return mission, tasks, claims, observations, evidence_cards
 

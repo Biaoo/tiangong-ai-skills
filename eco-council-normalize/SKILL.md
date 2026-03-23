@@ -84,6 +84,7 @@ Public-signal normalization currently supports:
 - `youtube-video-search`
 - `youtube-comments-fetch`
 - `bluesky-cascade-fetch`
+- `federal-register-doc-search`
 - `regulationsgov-comments-fetch`
 - `regulationsgov-comment-detail-fetch`
 - manifest-only ingestion for `gdelt-events-fetch`, `gdelt-mentions-fetch`, and `gdelt-gkg-fetch`

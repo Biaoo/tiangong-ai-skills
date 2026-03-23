@@ -28,6 +28,16 @@
 - Seed posts and thread nodes can both become `public_signal`.
 - The normalizer stores post text, author, URI, timestamp, and lightweight engagement counts.
 
+### `federal-register-doc-search`
+
+- Treated as official policy-document discovery from FederalRegister.gov.
+- Each result becomes one `public_signal` with:
+  - `signal_kind=policy-document`
+  - `external_id=document_number`
+  - `title`, `abstract`/`excerpts`, publication date, and agency metadata
+- Best for official rulemaking or notice context, not public-comment sentiment.
+- Legacy artifacts tagged `federal-register-documents-fetch` are still accepted for backward compatibility.
+
 ### `regulationsgov-comments-fetch`
 
 - List fetch is good for trend discovery and ID capture.

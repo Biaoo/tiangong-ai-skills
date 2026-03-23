@@ -14,6 +14,7 @@
     "bluesky-cascade-fetch",
     "youtube-video-search",
     "youtube-comments-fetch",
+    "federal-register-doc-search",
     "regulationsgov-comments-fetch",
     "regulationsgov-comment-detail-fetch"
   ],
@@ -41,6 +42,11 @@
       "source_skill": "youtube-comments-fetch",
       "selected": false,
       "reason": "Comment collection is unnecessary without a prior video-collection objective."
+    },
+    {
+      "source_skill": "federal-register-doc-search",
+      "selected": false,
+      "reason": "Official rulemaking documents are not necessary for this public-discussion-heavy smoke round."
     },
     {
       "source_skill": "regulationsgov-comments-fetch",

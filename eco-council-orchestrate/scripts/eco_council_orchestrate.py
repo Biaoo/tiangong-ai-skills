@@ -32,6 +32,7 @@ SKILL_DIRS = {
     "bluesky-cascade-fetch": REPO_DIR / "bluesky-cascade-fetch",
     "youtube-video-search": REPO_DIR / "youtube-video-search",
     "youtube-comments-fetch": REPO_DIR / "youtube-comments-fetch",
+    "federal-register-doc-search": REPO_DIR / "federal-register-doc-search",
     "regulationsgov-comments-fetch": REPO_DIR / "regulationsgov-comments-fetch",
     "regulationsgov-comment-detail-fetch": REPO_DIR / "regulationsgov-comment-detail-fetch",
     "airnow-hourly-obs-fetch": REPO_DIR / "airnow-hourly-obs-fetch",
@@ -48,6 +49,7 @@ FETCH_SCRIPT_PATHS = {
     "bluesky-cascade-fetch": SKILL_DIRS["bluesky-cascade-fetch"] / "scripts" / "bluesky_cascade_fetch.py",
     "youtube-video-search": SKILL_DIRS["youtube-video-search"] / "scripts" / "youtube_video_search.py",
     "youtube-comments-fetch": SKILL_DIRS["youtube-comments-fetch"] / "scripts" / "youtube_comments_fetch.py",
+    "federal-register-doc-search": SKILL_DIRS["federal-register-doc-search"] / "scripts" / "federal_register_doc_search.py",
     "regulationsgov-comments-fetch": SKILL_DIRS["regulationsgov-comments-fetch"] / "scripts" / "regulationsgov_comments_fetch.py",
     "regulationsgov-comment-detail-fetch": SKILL_DIRS["regulationsgov-comment-detail-fetch"] / "scripts" / "regulationsgov_comment_detail_fetch.py",
     "airnow-hourly-obs-fetch": SKILL_DIRS["airnow-hourly-obs-fetch"] / "scripts" / "airnow_hourly_obs_fetch.py",
@@ -63,6 +65,7 @@ PUBLIC_SOURCES = (
     "bluesky-cascade-fetch",
     "youtube-video-search",
     "youtube-comments-fetch",
+    "federal-register-doc-search",
     "regulationsgov-comments-fetch",
     "regulationsgov-comment-detail-fetch",
 )
@@ -954,6 +957,50 @@ def build_sociologist_steps(
                 "--pretty",
             ]
             notes.append("Use the saved YouTube video artifact as the only ID source for comment collection.")
+        elif source_skill == "federal-register-doc-search":
+            federal_register_term = merged_task_scalar(role_tasks, "federal_register_term") or query_text
+            argv = [
+                "python3",
+                str(FETCH_SCRIPT_PATHS[source_skill]),
+                "search",
+                "--term",
+                federal_register_term,
+                "--start-date",
+                to_date_text(window["start_utc"]),
+                "--end-date",
+                to_date_text(window["end_utc"]),
+                "--order",
+                merged_task_scalar(role_tasks, "federal_register_order") or "newest",
+                "--page-size",
+                merged_task_scalar(role_tasks, "federal_register_page_size") or "25",
+                "--max-pages",
+                merged_task_scalar(role_tasks, "federal_register_max_pages") or "3",
+                "--max-records",
+                merged_task_scalar(role_tasks, "federal_register_max_records") or "150",
+                "--output",
+                str(artifact_path),
+                "--pretty",
+            ]
+            for agency in merged_task_string_list(role_tasks, "federal_register_agencies"):
+                argv.extend(["--agency", agency])
+            for document_type in merged_task_string_list(role_tasks, "federal_register_document_types"):
+                argv.extend(["--document-type", document_type])
+            for topic in merged_task_string_list(role_tasks, "federal_register_topics"):
+                argv.extend(["--topic", topic])
+            for section in merged_task_string_list(role_tasks, "federal_register_sections"):
+                argv.extend(["--section", section])
+            docket_id = merged_task_scalar(role_tasks, "federal_register_docket_id")
+            if docket_id:
+                argv.extend(["--docket-id", docket_id])
+            regulation_id_number = merged_task_scalar(role_tasks, "federal_register_regulation_id_number")
+            if regulation_id_number:
+                argv.extend(["--regulation-id-number", regulation_id_number])
+            significant = merged_task_scalar(role_tasks, "federal_register_significant")
+            if significant:
+                argv.extend(["--significant", significant])
+            for field_name in merged_task_string_list(role_tasks, "federal_register_fields"):
+                argv.extend(["--field", field_name])
+            notes.append("Use Federal Register for official U.S. rulemaking, notice, and docket-linked policy documents.")
         elif source_skill == "regulationsgov-comments-fetch":
             argv = [
                 "python3",
