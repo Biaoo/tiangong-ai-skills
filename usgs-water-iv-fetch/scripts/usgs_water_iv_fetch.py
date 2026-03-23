@@ -51,6 +51,7 @@ DEFAULT_SITE_TYPE = "ST"
 DEFAULT_SITE_STATUS = "active"
 DEFAULT_USER_AGENT = "usgs-water-iv-fetch/1.0"
 DEFAULT_PARAMETER_CODES = ("00060", "00065")
+SCHEMA_VERSION = "1.0.0"
 
 RETRIABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 SITE_STATUS_CHOICES = ("all", "active", "inactive")
@@ -872,10 +873,22 @@ def fetch_command(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.dry_run:
         payload = {
+            "schema_version": SCHEMA_VERSION,
+            "source_skill": "usgs-water-iv-fetch",
             "generated_at_utc": to_rfc3339_z(datetime.now(timezone.utc)),
             "dry_run": True,
             "request": request_payload,
             "runtime_config": runtime_config_payload(config),
+            "validation_summary": {
+                "ok": True,
+                "total_issue_count": 0,
+                "issues": [],
+            },
+            "series_count": 0,
+            "record_count": 0,
+            "series": [],
+            "records": [],
+            "artifacts": {},
         }
         return {"command": "fetch", "ok": True, "payload": payload}
 
@@ -890,6 +903,8 @@ def fetch_command(args: argparse.Namespace) -> dict[str, Any]:
         issues=issues,
     )
     payload = {
+        "schema_version": SCHEMA_VERSION,
+        "source_skill": "usgs-water-iv-fetch",
         "generated_at_utc": to_rfc3339_z(datetime.now(timezone.utc)),
         "dry_run": False,
         "request": request_payload,
@@ -912,8 +927,8 @@ def fetch_command(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.output:
         output_path = Path(args.output).expanduser().resolve()
-        write_json(output_path, payload, pretty=args.pretty)
         payload["artifacts"] = {"full_payload_json": str(output_path)}
+        write_json(output_path, payload, pretty=args.pretty)
     if args.fail_on_validation_error and issues.total_count > 0:
         raise RuntimeError(f"Validation reported {issues.total_count} issue(s).")
     return {"command": "fetch", "ok": True, "payload": payload}

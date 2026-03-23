@@ -11,6 +11,11 @@ description: Fetch USGS Water Services Instantaneous Values JSON for one boundin
 - Return site metadata plus flattened time-series records that downstream normalization can map into hydrology observations.
 - Keep runtime deterministic with retries, throttling, response-size caps, and validation summaries.
 
+## Repository Policy
+- This is the canonical USGS station-hydrology skill in this repository.
+- When eco-council or OpenClaw assigns a raw artifact path, write this skill's full JSON payload to that exact path with `--output`.
+- Do not treat dry-run output as collected evidence.
+
 ## Required Environment
 - Configure runtime by environment variables in `references/env.md`.
 - Start from `assets/config.example.env`.
