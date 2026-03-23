@@ -1,6 +1,6 @@
 ---
 name: eco-council-supervisor
-description: Run an eco-council workflow through one stage-gated local supervisor and maintain a local SQLite case library of historical eco-council records. Use when you want to bootstrap a run from mission JSON, provision fixed OpenClaw moderator/sociologist/environmentalist agents, require audited expert source-selection before any fetch stage, import agent JSON replies safely, advance rounds with minimal manual freedom, render a human-readable meeting record from the run directory, or archive completed runs into a queryable local history database.
+description: Run an eco-council workflow through one stage-gated local supervisor, maintain a local SQLite case library of historical eco-council records, and aggregate a separate offline SQLite signal corpus of normalized public and environment signals across runs. Use when you want to bootstrap a run from mission JSON, provision fixed OpenClaw moderator/sociologist/environmentalist agents, require audited expert source-selection before any fetch stage, import agent JSON replies safely, advance rounds with minimal manual freedom, render a human-readable meeting record from the run directory, archive completed runs into a queryable local history database, or import signal-bearing run directories into a cross-run corpus for retrieval, evaluation, and training preparation.
 ---
 
 # Eco Council Supervisor
@@ -22,6 +22,7 @@ Use this skill when the eco-council flow should be driven by one deterministic l
   - `import-report`
   - `import-decision`
 8. If raw fetch is produced by an external runner instead of `continue-run`, import the canonical `fetch_execution.json` with `import-fetch-execution`.
+9. After `run-data-plane` produces normalized analytics databases, optionally import the run into the offline signal corpus for cross-run aggregation.
 
 ## Command Surface
 
@@ -29,10 +30,11 @@ Use this skill when the eco-council flow should be driven by one deterministic l
   - Calls `$eco-council-orchestrate bootstrap-run`.
   - Creates supervisor state plus role/session prompt files.
   - When `--history-db` is set, moderator task-review and decision turns also receive a compact similar-case summary from the local history library.
+  - When `--signal-corpus-db` is set, every successful `run-data-plane` step also overwrites the corresponding run inside the offline signal corpus automatically.
 - `python3 scripts/eco_council_supervisor.py provision-openclaw-agents --run-dir ... --pretty`
   - Creates or reuses fixed OpenClaw agent ids for moderator, sociologist, and environmentalist.
-- `python3 scripts/eco_council_supervisor.py status --run-dir ... [--history-db ... --history-top-k 3] [--disable-history-context] --pretty`
-  - Shows current round, stage, outbox prompts, `CURRENT_STEP.txt`, and the current historical-context attachment state.
+- `python3 scripts/eco_council_supervisor.py status --run-dir ... [--history-db ... --history-top-k 3] [--disable-history-context] [--signal-corpus-db ...] [--disable-signal-corpus-import] --pretty`
+  - Shows current round, stage, outbox prompts, `CURRENT_STEP.txt`, the current historical-context attachment state, and the current automatic offline signal-corpus import attachment state.
 - `python3 scripts/eco_council_supervisor.py summarize-run --run-dir ... --lang zh --pretty`
   - Renders one human-readable Markdown meeting record under `RUN_DIR/reports/`.
   - Supports `--lang zh|en` for report language only; workflow payloads remain in English.
@@ -50,6 +52,16 @@ Use this skill when the eco-council flow should be driven by one deterministic l
   - Shows one case plus per-round summaries; optional flags can include report, claim, and evidence summaries.
 - `python3 scripts/eco_council_case_library.py export-case-markdown --db ... --case-id ... [--lang zh|en] --pretty`
   - Exports one human-readable Markdown case record for audit or replay review.
+- `python3 scripts/eco_council_signal_corpus.py init-db --db ... --pretty`
+  - Initializes a separate local SQLite corpus for normalized public/environment signals imported from run analytics databases.
+- `python3 scripts/eco_council_signal_corpus.py import-run --db ... --run-dir ... [--overwrite] --pretty`
+  - Imports one signal-bearing run after `run-data-plane`; reads analytics database paths from `run_manifest.json` when present and otherwise falls back to `RUN_DIR/analytics/public_signals.sqlite` plus `RUN_DIR/analytics/environment_signals.sqlite`.
+- `python3 scripts/eco_council_signal_corpus.py import-runs-root --db ... --runs-root ... [--overwrite] --pretty`
+  - Bulk-imports every eligible run under one `runs/` root into the offline signal corpus.
+- `python3 scripts/eco_council_signal_corpus.py list-runs --db ... [--limit 50] --pretty`
+  - Lists imported runs with current stage and normalized signal counts.
+- `python3 scripts/eco_council_signal_corpus.py show-run --db ... --run-id ... --pretty`
+  - Shows one imported run with per-round summaries, source breakdowns, claim types, metrics, and artifact inventory aggregates.
 - `python3 scripts/eco_council_supervisor.py continue-run --run-dir ... --pretty`
   - Runs exactly one approved shell stage.
 - `python3 scripts/eco_council_supervisor.py run-agent-step --run-dir ... --pretty`
@@ -71,6 +83,8 @@ Use this skill when the eco-council flow should be driven by one deterministic l
 - If raw artifacts come from an external runner or simulator, import only a canonical `fetch_execution.json` whose usable artifact paths already exist.
 - If OpenClaw cannot load local repo skills directly, still use the generated prompt files as the source of truth.
 - Treat the case-library SQLite database as historical record storage, not as a replacement for canonical per-run JSON artifacts.
+- Treat the signal-corpus SQLite database as an offline cross-run aggregation and training-prep store built from normalized analytics DBs, not as a replacement for canonical per-run JSON artifacts or the live per-run analytics databases.
+- Automatic signal-corpus import happens only after `run-data-plane` succeeds; it never replaces the live per-run analytics DBs that were just written.
 - Treat moderator historical context as planning-only retrieval help; it must not override current-run evidence.
 
 ## References

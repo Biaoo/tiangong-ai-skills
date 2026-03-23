@@ -36,6 +36,7 @@ SUPPORTED_SOURCES = {
     "youtube-comments-fetch",
     "regulationsgov-comments-fetch",
     "regulationsgov-comment-detail-fetch",
+    "airnow-hourly-obs-fetch",
     "open-meteo-historical-fetch",
     "open-meteo-air-quality-fetch",
     "open-meteo-flood-fetch",
@@ -103,6 +104,7 @@ CLAIM_METRIC_RULES = {
     },
 }
 SOURCE_METRIC_CATALOG = {
+    "airnow-hourly-obs-fetch": ("pm2_5", "pm10", "ozone", "nitrogen_dioxide"),
     "open-meteo-air-quality-fetch": ("pm2_5", "pm10", "us_aqi", "nitrogen_dioxide", "ozone"),
     "open-meteo-historical-fetch": (
         "temperature_2m",
@@ -146,11 +148,33 @@ BASE_RECORD_COUNTS = {
     "youtube-comments-fetch": 8,
     "regulationsgov-comments-fetch": 4,
     "regulationsgov-comment-detail-fetch": 3,
+    "airnow-hourly-obs-fetch": 4,
     "open-meteo-air-quality-fetch": 3,
     "open-meteo-historical-fetch": 3,
     "open-meteo-flood-fetch": 3,
     "nasa-firms-fire-fetch": 3,
     "openaq-data-fetch": 4,
+}
+
+AIRNOW_PARAMETER_NAMES = {
+    "nitrogen_dioxide": "NO2",
+    "ozone": "OZONE",
+    "pm10": "PM10",
+    "pm2_5": "PM25",
+}
+
+AIRNOW_AQI_KIND = {
+    "nitrogen_dioxide": "hourly-aqi",
+    "ozone": "nowcast-aqi",
+    "pm10": "nowcast-aqi",
+    "pm2_5": "nowcast-aqi",
+}
+
+AIRNOW_UNITS = {
+    "nitrogen_dioxide": "PPB",
+    "ozone": "PPB",
+    "pm10": "UG/M3",
+    "pm2_5": "UG/M3",
 }
 PUBLIC_DOMAINS = {
     "air-pollution": "airwatch.example.invalid",
@@ -725,6 +749,9 @@ def source_count(payload: Any, source_skill: str) -> int:
         return len(seeds) if isinstance(seeds, list) else 0
     if source_skill in JSONL_SOURCES and isinstance(payload, list):
         return len(payload)
+    if source_skill == "airnow-hourly-obs-fetch" and isinstance(payload, dict):
+        records = payload.get("records")
+        return len(records) if isinstance(records, list) else 0
     if source_skill.startswith("open-meteo") and isinstance(payload, dict):
         records = payload.get("records")
         return len(records) if isinstance(records, list) else 0
@@ -747,6 +774,25 @@ def empty_payload_for_source(source_skill: str, start: datetime, end: datetime) 
         return {"seed_posts": [], "threads": []}
     if source_skill in JSONL_SOURCES:
         return []
+    if source_skill == "airnow-hourly-obs-fetch":
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "source_skill": source_skill,
+            "generated_at_utc": utc_now_iso(),
+            "request": {
+                "start_datetime_utc": to_rfc3339_z(start),
+                "end_datetime_utc": to_rfc3339_z(end),
+                "parameter_names": [],
+                "hour_count": 0,
+                "hourly_file_urls": [],
+            },
+            "dry_run": False,
+            "transport": {"attempted_files": 0, "successful_files": 0, "failed_files": 0},
+            "validation_summary": {"ok": True, "total_issue_count": 0, "issues": [], "records_emitted": 0},
+            "record_count": 0,
+            "records": [],
+            "artifacts": {},
+        }
     if source_skill.startswith("open-meteo"):
         return {"records": []}
     if source_skill == "nasa-firms-fire-fetch":
@@ -1231,6 +1277,110 @@ def generate_openaq_payload(*, mission: dict[str, Any], scenario: dict[str, Any]
     return {"result": {"records": rows}, "simulation": {"scenario_id": maybe_text(scenario.get("scenario_id")), "mode": mode}}
 
 
+def estimated_airnow_aqi(metric: str, value: float) -> int:
+    factor = {
+        "nitrogen_dioxide": 1.5,
+        "ozone": 1.0,
+        "pm10": 1.6,
+        "pm2_5": 2.8,
+    }.get(metric, 1.0)
+    return max(0, min(500, int(round(value * factor))))
+
+
+def generate_airnow_payload(*, mission: dict[str, Any], scenario: dict[str, Any], mode: str, source_skill: str) -> dict[str, Any]:
+    start, end = mission_window(mission)
+    geometry = ensure_object(mission_region(mission).get("geometry"), "mission.region.geometry")
+    latitude, longitude = geometry_center(geometry)
+    latitude, longitude = shifted_coordinates(latitude, longitude, scenario)
+    claim_type = maybe_text(scenario.get("claim_type")) or "other"
+    rng = random.Random(seed_for_source(scenario, source_skill))
+    metrics = available_metrics_for_source(source_skill, claim_type, mode, scenario)
+    if source_skill in fault_list(scenario, "degrade_sources") and len(metrics) > 1:
+        metrics = metrics[:1]
+    sample_count = max(1, record_count_for_source(source_skill, mode, scenario))
+    timestamps = datetime_labels(start, end, sample_count, scenario)
+    records: list[dict[str, Any]] = []
+    for metric_index, metric in enumerate(metrics or ["pm2_5"]):
+        parameter_name = AIRNOW_PARAMETER_NAMES.get(metric, "PM25")
+        values = metric_series(
+            source_skill=source_skill,
+            claim_type=claim_type,
+            metric=metric,
+            mode=mode if mode != "mixed" or metric_index == 0 else "contradict",
+            count=len(timestamps),
+            scenario=scenario,
+            rng=rng,
+        )
+        for index, timestamp in enumerate(timestamps):
+            site_lat = round(latitude + metric_index * 0.01, 6)
+            site_lon = round(longitude + metric_index * 0.01, 6)
+            concentration = round(values[index], 3)
+            records.append(
+                {
+                    "aqsid": f"sim-aqsid-{metric_index + 1:03d}",
+                    "site_name": f"Sim AirNow Site {metric_index + 1}",
+                    "status": "Active",
+                    "epa_region": f"{(metric_index % 9) + 1:02d}",
+                    "latitude": site_lat,
+                    "longitude": site_lon,
+                    "country_code": "US",
+                    "state_name": "SimState",
+                    "observed_at_utc": timestamp,
+                    "data_source": "AIRNOW",
+                    "reporting_areas": [maybe_text(mission_region(mission).get("label")) or "Sim Reporting Area"],
+                    "parameter_name": parameter_name,
+                    "aqi_value": estimated_airnow_aqi(metric, concentration),
+                    "aqi_kind": AIRNOW_AQI_KIND.get(metric, "nowcast-aqi"),
+                    "raw_concentration": concentration,
+                    "unit": AIRNOW_UNITS.get(metric, METRIC_UNITS.get(metric, "unknown")),
+                    "measured": True,
+                    "source_file_url": f"https://files.airnowtech.org/airnow/sim/{maybe_text(scenario.get('scenario_id'))}/{parameter_name}/{index + 1}.dat",
+                }
+            )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source_skill": source_skill,
+        "generated_at_utc": utc_now_iso(),
+        "request": {
+            "bbox": {
+                "min_lon": round(longitude - 0.2, 6),
+                "min_lat": round(latitude - 0.2, 6),
+                "max_lon": round(longitude + 0.2, 6),
+                "max_lat": round(latitude + 0.2, 6),
+            },
+            "start_datetime_utc": to_rfc3339_z(start),
+            "end_datetime_utc": to_rfc3339_z(end),
+            "parameter_names": [AIRNOW_PARAMETER_NAMES.get(metric, "PM25") for metric in metrics or ["pm2_5"]],
+            "hour_count": len(timestamps),
+            "hourly_file_urls": [item["source_file_url"] for item in records[: len(timestamps)]],
+        },
+        "dry_run": False,
+        "transport": {
+            "attempted_files": len(timestamps),
+            "successful_files": len(timestamps),
+            "failed_files": 0,
+            "total_bytes": len(records) * 128,
+            "total_retries": 0,
+            "status_code_counts": {"200": len(timestamps)},
+            "failures": [],
+        },
+        "validation_summary": {
+            "ok": True,
+            "total_issue_count": 0,
+            "issues": [],
+            "input_rows": len(records),
+            "rows_bad_coordinates": 0,
+            "rows_outside_bbox": 0,
+            "rows_outside_window": 0,
+            "parameter_candidates": len(records),
+            "records_emitted": len(records),
+        },
+        "record_count": len(records),
+        "records": records,
+        "artifacts": {},
+    }
+
+
 def dependency_artifact_paths(statuses: list[dict[str, Any]]) -> dict[str, Path]:
     output: dict[str, Path] = {}
     for status in statuses:
@@ -1284,6 +1434,8 @@ def generate_payload_for_source(
             source_skill=source_skill,
             dependency_artifacts=dependency_artifacts,
         )
+    if source_skill == "airnow-hourly-obs-fetch":
+        return generate_airnow_payload(mission=mission, scenario=scenario, mode=mode, source_skill=source_skill)
     if source_skill in {"open-meteo-historical-fetch", "open-meteo-air-quality-fetch", "open-meteo-flood-fetch"}:
         return generate_open_meteo_payload(mission=mission, scenario=scenario, mode=mode, source_skill=source_skill)
     if source_skill == "nasa-firms-fire-fetch":

@@ -1,0 +1,35 @@
+# USGS Water IV Fetch Environment
+
+- `USGS_WATER_IV_BASE_URL`
+  - Default: `https://waterservices.usgs.gov/nwis/iv/`
+  - For deterministic local testing, this may also be a `file://` URL that points at one saved USGS IV JSON fixture.
+- `USGS_WATER_IV_TIMEOUT_SECONDS`
+  - Per-request timeout.
+- `USGS_WATER_IV_MAX_RETRIES`
+  - Retry count for transient HTTP and network failures.
+- `USGS_WATER_IV_RETRY_BACKOFF_SECONDS`
+  - Initial retry delay.
+- `USGS_WATER_IV_RETRY_BACKOFF_MULTIPLIER`
+  - Exponential backoff factor.
+- `USGS_WATER_IV_MIN_REQUEST_INTERVAL_SECONDS`
+  - Minimum sleep between retry attempts.
+- `USGS_WATER_IV_MAX_PARAMETER_CODES_PER_RUN`
+  - Local safety cap for requested USGS parameter codes.
+- `USGS_WATER_IV_MAX_SITES_PER_RUN`
+  - Local safety cap when explicit site lists are used.
+- `USGS_WATER_IV_MAX_TIME_SERIES_PER_RUN`
+  - Maximum parsed `timeSeries` objects allowed in one response.
+- `USGS_WATER_IV_MAX_VALUES_PER_SERIES`
+  - Maximum parsed values allowed for one site/parameter series.
+- `USGS_WATER_IV_MAX_RESPONSE_BYTES`
+  - Fail if the downloaded response exceeds this byte limit.
+- `USGS_WATER_IV_MAX_RETRY_AFTER_SECONDS`
+  - Fail if server `Retry-After` exceeds this value.
+- `USGS_WATER_IV_DEFAULT_SITE_TYPE`
+  - Local default for `--site-type`.
+  - Recommended value for eco-council hydrology tasks: `ST`.
+- `USGS_WATER_IV_DEFAULT_SITE_STATUS`
+  - Local default for `--site-status`.
+  - Recommended value for eco-council hydrology tasks: `active`.
+- `USGS_WATER_IV_USER_AGENT`
+  - User-Agent sent on every request.

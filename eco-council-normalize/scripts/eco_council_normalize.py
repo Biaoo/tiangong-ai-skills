@@ -31,7 +31,7 @@ CONTRACT_SCRIPT_PATH = SKILL_DIR.parent / "eco-council-data-contract" / "scripts
 
 SCHEMA_VERSION = "1.0.0"
 POINT_MATCH_EPSILON_DEGREES = 0.05
-NORMALIZE_CACHE_VERSION = "v1"
+NORMALIZE_CACHE_VERSION = "v2"
 MAX_CONTEXT_TASKS = 4
 MAX_CONTEXT_CLAIMS = 4
 MAX_CONTEXT_OBSERVATIONS = 8
@@ -173,6 +173,34 @@ OPENAQ_TIME_KEYS = (
 OPENAQ_VALUE_KEYS = ("value", "measurement", "concentration")
 OPENAQ_LAT_KEYS = ("latitude", "lat")
 OPENAQ_LON_KEYS = ("longitude", "lon", "lng")
+ENVIRONMENT_METRIC_ALIASES = {
+    "pm25": "pm2_5",
+    "pm2.5": "pm2_5",
+    "pm2_5": "pm2_5",
+    "pm10": "pm10",
+    "o3": "ozone",
+    "ozone": "ozone",
+    "no2": "nitrogen_dioxide",
+    "nitrogen_dioxide": "nitrogen_dioxide",
+    "so2": "sulphur_dioxide",
+    "sulphur_dioxide": "sulphur_dioxide",
+    "co": "carbon_monoxide",
+    "carbon_monoxide": "carbon_monoxide",
+    "us_aqi": "us_aqi",
+    "gage_height": "gage_height",
+}
+AIRNOW_PARAMETER_METRIC_MAP = {
+    "PM25": "pm2_5",
+    "PM10": "pm10",
+    "OZONE": "ozone",
+    "NO2": "nitrogen_dioxide",
+    "CO": "carbon_monoxide",
+    "SO2": "sulphur_dioxide",
+}
+USGS_PARAMETER_METRIC_MAP = {
+    "00060": "river_discharge",
+    "00065": "gage_height",
+}
 
 
 def utc_now_iso() -> str:
@@ -265,6 +293,17 @@ def maybe_number(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def canonical_environment_metric(value: Any) -> str:
+    text = maybe_text(value)
+    if not text:
+        return ""
+    lowered = text.casefold()
+    if lowered.endswith("_aqi"):
+        base_metric = ENVIRONMENT_METRIC_ALIASES.get(lowered[:-4], lowered[:-4])
+        return f"{base_metric}_aqi"
+    return ENVIRONMENT_METRIC_ALIASES.get(lowered, text)
 
 
 def parse_loose_datetime(value: Any) -> datetime | None:
@@ -1397,14 +1436,22 @@ def make_environment_signal(
     sha256_value: str,
     raw_obj: Any,
 ) -> dict[str, Any]:
-    signal_hash = stable_hash(source_skill, metric, observed_at_utc or window_start_utc or record_locator, value, latitude, longitude)
+    canonical_metric = canonical_environment_metric(metric)
+    signal_hash = stable_hash(
+        source_skill,
+        canonical_metric,
+        observed_at_utc or window_start_utc or record_locator,
+        value,
+        latitude,
+        longitude,
+    )
     return {
         "signal_id": f"envsig-{signal_hash[:12]}",
         "run_id": run_id,
         "round_id": round_id,
         "source_skill": source_skill,
         "signal_kind": signal_kind,
-        "metric": metric,
+        "metric": canonical_metric,
         "value": value,
         "unit": unit or "unknown",
         "observed_at_utc": observed_at_utc,
@@ -1688,6 +1735,165 @@ def iter_openaq_signals(
     return signals
 
 
+def iter_airnow_signals(
+    path: Path,
+    *,
+    run_id: str,
+    round_id: str,
+) -> list[dict[str, Any]]:
+    payload = parse_path_payload(path)
+    rows = payload.get("records") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+
+    sha256_value = file_sha256(path)
+    signals: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        parameter_name = maybe_text(row.get("parameter_name")).upper()
+        metric_base = AIRNOW_PARAMETER_METRIC_MAP.get(parameter_name)
+        if not metric_base:
+            continue
+        latitude = maybe_number(row.get("latitude"))
+        longitude = maybe_number(row.get("longitude"))
+        observed_at_utc = to_rfc3339_z(parse_loose_datetime(row.get("observed_at_utc")))
+        metadata = {
+            "aqsid": maybe_text(row.get("aqsid")),
+            "site_name": maybe_text(row.get("site_name")),
+            "status": maybe_text(row.get("status")),
+            "epa_region": maybe_text(row.get("epa_region")),
+            "country_code": maybe_text(row.get("country_code")),
+            "state_name": maybe_text(row.get("state_name")),
+            "data_source": maybe_text(row.get("data_source")),
+            "reporting_areas": row.get("reporting_areas") if isinstance(row.get("reporting_areas"), list) else [],
+            "aqi_kind": maybe_text(row.get("aqi_kind")),
+            "measured": row.get("measured"),
+            "source_file_url": maybe_text(row.get("source_file_url")),
+        }
+        raw_concentration = maybe_number(row.get("raw_concentration"))
+        if raw_concentration is not None:
+            signals.append(
+                make_environment_signal(
+                    run_id=run_id,
+                    round_id=round_id,
+                    source_skill="airnow-hourly-obs-fetch",
+                    signal_kind="station-measurement",
+                    metric=metric_base,
+                    value=raw_concentration,
+                    unit=maybe_text(row.get("unit")) or "unknown",
+                    observed_at_utc=observed_at_utc,
+                    window_start_utc=None,
+                    window_end_utc=None,
+                    latitude=latitude,
+                    longitude=longitude,
+                    bbox=None,
+                    quality_flags=["station-observation", "preliminary", "airnow-file-product"],
+                    metadata=metadata,
+                    artifact_path=path,
+                    record_locator=f"$.records[{index}].raw_concentration",
+                    sha256_value=sha256_value,
+                    raw_obj=row,
+                )
+            )
+        aqi_value = maybe_number(row.get("aqi_value"))
+        if aqi_value is not None:
+            signals.append(
+                make_environment_signal(
+                    run_id=run_id,
+                    round_id=round_id,
+                    source_skill="airnow-hourly-obs-fetch",
+                    signal_kind="station-aqi",
+                    metric=f"{metric_base}_aqi",
+                    value=aqi_value,
+                    unit="AQI",
+                    observed_at_utc=observed_at_utc,
+                    window_start_utc=None,
+                    window_end_utc=None,
+                    latitude=latitude,
+                    longitude=longitude,
+                    bbox=None,
+                    quality_flags=["station-aqi", "preliminary", "airnow-file-product"],
+                    metadata=metadata,
+                    artifact_path=path,
+                    record_locator=f"$.records[{index}].aqi_value",
+                    sha256_value=sha256_value,
+                    raw_obj=row,
+                )
+            )
+    return signals
+
+
+def iter_usgs_water_iv_signals(
+    path: Path,
+    *,
+    run_id: str,
+    round_id: str,
+) -> list[dict[str, Any]]:
+    payload = parse_path_payload(path)
+    rows = payload.get("records") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+
+    sha256_value = file_sha256(path)
+    signals: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        parameter_code = maybe_text(row.get("parameter_code"))
+        metric = USGS_PARAMETER_METRIC_MAP.get(parameter_code)
+        if not metric:
+            continue
+        value = maybe_number(row.get("value"))
+        if value is None:
+            continue
+        latitude = maybe_number(row.get("latitude"))
+        longitude = maybe_number(row.get("longitude"))
+        observed_at_utc = to_rfc3339_z(parse_loose_datetime(row.get("observed_at_utc")))
+        quality_flags = ["station-observation", "usgs-water-services-iv"]
+        if bool(row.get("provisional")):
+            quality_flags.append("provisional")
+        metadata = {
+            "site_number": maybe_text(row.get("site_number")),
+            "site_name": maybe_text(row.get("site_name")),
+            "agency_code": maybe_text(row.get("agency_code")),
+            "site_type": maybe_text(row.get("site_type")),
+            "state_code": maybe_text(row.get("state_code")),
+            "county_code": maybe_text(row.get("county_code")),
+            "huc_code": maybe_text(row.get("huc_code")),
+            "parameter_code": parameter_code,
+            "variable_name": maybe_text(row.get("variable_name")),
+            "variable_description": maybe_text(row.get("variable_description")),
+            "statistic_code": maybe_text(row.get("statistic_code")),
+            "qualifiers": row.get("qualifiers") if isinstance(row.get("qualifiers"), list) else [],
+            "source_query_url": maybe_text(row.get("source_query_url")),
+        }
+        signals.append(
+            make_environment_signal(
+                run_id=run_id,
+                round_id=round_id,
+                source_skill="usgs-water-iv-fetch",
+                signal_kind="station-measurement",
+                metric=metric,
+                value=value,
+                unit=maybe_text(row.get("unit")) or "unknown",
+                observed_at_utc=observed_at_utc,
+                window_start_utc=None,
+                window_end_utc=None,
+                latitude=latitude,
+                longitude=longitude,
+                bbox=None,
+                quality_flags=quality_flags,
+                metadata=metadata,
+                artifact_path=path,
+                record_locator=f"$.records[{index}].value",
+                sha256_value=sha256_value,
+                raw_obj=row,
+            )
+        )
+    return signals
+
+
 def normalize_environment_source(
     source_skill: str,
     path: Path,
@@ -1742,6 +1948,10 @@ def normalize_environment_source(
             )
     elif source_skill == "openaq-data-fetch":
         signals = iter_openaq_signals(path, run_id=run_id, round_id=round_id)
+    elif source_skill == "airnow-hourly-obs-fetch":
+        signals = iter_airnow_signals(path, run_id=run_id, round_id=round_id)
+    elif source_skill == "usgs-water-iv-fetch":
+        signals = iter_usgs_water_iv_signals(path, run_id=run_id, round_id=round_id)
     else:
         raise ValueError(f"Unsupported environment source skill: {source_skill}")
     return signals, extra_observations
@@ -1799,7 +2009,7 @@ def normalize_environment_source_cached(
 
 
 def observation_group_key(signal: dict[str, Any], mission_scope: dict[str, Any]) -> tuple[str, str, str]:
-    metric = maybe_text(signal.get("metric"))
+    metric = canonical_environment_metric(signal.get("metric"))
     source_skill = maybe_text(signal.get("source_skill"))
     lat = maybe_number(signal.get("latitude"))
     lon = maybe_number(signal.get("longitude"))
@@ -1964,6 +2174,7 @@ def load_canonical_list(path: Path) -> list[dict[str, Any]]:
 
 
 def metric_relevant(claim_type: str, metric: str) -> bool:
+    metric = canonical_environment_metric(metric)
     if claim_type not in CLAIM_METRIC_RULES:
         return True
     support_metrics = set(CLAIM_METRIC_RULES[claim_type]["support"].keys())
@@ -1972,7 +2183,7 @@ def metric_relevant(claim_type: str, metric: str) -> bool:
 
 
 def assess_observation_against_claim(claim_type: str, observation: dict[str, Any]) -> tuple[int, int, str]:
-    metric = maybe_text(observation.get("metric"))
+    metric = canonical_environment_metric(observation.get("metric"))
     metric_value = extract_value_for_metric(observation)
     if metric_value is None:
         return 0, 0, ""

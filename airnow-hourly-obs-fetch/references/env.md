@@ -1,0 +1,30 @@
+# AirNow Hourly Obs Fetch Environment
+
+- `AIRNOW_HOURLY_BASE_URL`
+  - Default: `https://files.airnowtech.org`
+- `AIRNOW_HOURLY_PATH_TEMPLATE`
+  - Default: `/airnow/{year}/{ymd}/HourlyAQObs_{yyyymmddhh}.dat`
+  - Supported placeholders:
+    - `{year}` (e.g. `2026`)
+    - `{ymd}` (e.g. `20260322`)
+    - `{yyyymmddhh}` (e.g. `2026032200`)
+- `AIRNOW_HOURLY_TIMEOUT_SECONDS`
+  - Per-request timeout.
+- `AIRNOW_HOURLY_MAX_RETRIES`
+  - Retry count for transient HTTP and network failures.
+- `AIRNOW_HOURLY_RETRY_BACKOFF_SECONDS`
+  - Initial retry delay.
+- `AIRNOW_HOURLY_RETRY_BACKOFF_MULTIPLIER`
+  - Exponential backoff factor.
+- `AIRNOW_HOURLY_MIN_REQUEST_INTERVAL_SECONDS`
+  - Minimum sleep between outbound requests.
+- `AIRNOW_HOURLY_MAX_HOURS_PER_RUN`
+  - Local safety cap for UTC hours in one fetch.
+- `AIRNOW_HOURLY_MAX_FILES_PER_RUN`
+  - Local safety cap for file requests in one fetch.
+- `AIRNOW_HOURLY_MAX_ROWS_PER_FILE`
+  - Local safety cap for parsed CSV rows from one file.
+- `AIRNOW_HOURLY_MAX_RETRY_AFTER_SECONDS`
+  - Fail if server `Retry-After` exceeds this value.
+- `AIRNOW_HOURLY_USER_AGENT`
+  - User-Agent sent on every request.

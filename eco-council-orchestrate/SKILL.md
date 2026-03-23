@@ -51,6 +51,7 @@ python3 scripts/eco_council_orchestrate.py prepare-round \
 ```
 
 5. Let the expert agents fetch raw artifacts into the exact `raw/` paths named by the prompt files.
+  - Environment fetches can be zero-step, or can include `airnow-hourly-obs-fetch`, `usgs-water-iv-fetch`, `open-meteo-*`, `nasa-firms-fire-fetch`, and `openaq-data-fetch`, depending on audited source selection and mission source policy.
 
 6. Run the deterministic data plane after raw artifacts exist.
 
@@ -89,6 +90,7 @@ python3 scripts/eco_council_orchestrate.py advance-round \
 
 ## Special Capability
 
+- `prepare-round` can emit one-step AirNow hourly file-product fetches when the environmentalist selected `airnow-hourly-obs-fetch` and the mission source policy allows it.
 - `collect-openaq` wraps the multi-step OpenAQ chain:
   - nearby location discovery
   - sensor discovery
@@ -96,6 +98,17 @@ python3 scripts/eco_council_orchestrate.py advance-round \
   - aggregation into one normalizer-ready raw artifact
 
 Use it directly when `openaq-data-fetch` needs a station-measurement artifact without pushing OpenAQ API chaining into the expert prompt.
+
+- `prepare-round` can also emit direct `airnow-hourly-obs-fetch` steps for mission or task geometry in the United States.
+  - Geometry is converted into one fetch bbox automatically.
+  - Default pollutant parameters are `PM25`, `PM10`, `OZONE`, and `NO2`.
+  - Task inputs may override this with `airnow_parameter_names` and `airnow_point_padding_deg`.
+
+- `prepare-round` can also emit direct `usgs-water-iv-fetch` steps for mission or task geometry in the United States.
+  - Geometry is converted into one fetch bbox automatically.
+  - Default parameter codes are `00060` and `00065`.
+  - Default site filters are `siteType=ST` and `siteStatus=active`.
+  - Task inputs may override this with `usgs_parameter_codes`, `usgs_point_padding_deg`, `usgs_site_type`, and `usgs_site_status`.
 
 ## References
 

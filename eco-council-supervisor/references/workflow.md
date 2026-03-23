@@ -58,3 +58,11 @@ The supervisor keeps a strict split:
 ## OpenClaw Note
 
 `provision-openclaw-agents` creates isolated OpenClaw agents, but it does not force a chat channel. That keeps Feishu optional. You can talk to the agents through whatever OpenClaw surface you prefer.
+
+## Offline Signal Corpus
+
+- Import a run into the offline signal corpus only after `run-data-plane` has produced normalized analytics databases, or when the run directory already contains those databases from an earlier execution.
+- `scripts/eco_council_signal_corpus.py` resolves analytics DB paths from `RUN_DIR/run_manifest.json` first and otherwise falls back to `RUN_DIR/analytics/public_signals.sqlite` plus `RUN_DIR/analytics/environment_signals.sqlite`.
+- If supervisor state has `signal_corpus.db` configured, `continue-run` automatically imports the current run into that offline signal corpus immediately after a successful `run-data-plane` step.
+- The offline signal corpus is a separate cross-run aggregation store for retrieval, evaluation, and training preparation. Keep canonical per-run JSON artifacts and per-run analytics DBs as the source of truth for an individual run.
+- Replay fixtures or eval bundles that only materialize shared JSON outputs without analytics DB tables will not populate the offline signal corpus.

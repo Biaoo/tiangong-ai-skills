@@ -1,0 +1,4 @@
+interface:
+  display_name: "AirNow Hourly Obs Fetch"
+  short_description: "Fetch AirNow Hourly AQ Obs file products"
+  default_prompt: "Use $airnow-hourly-obs-fetch to fetch AirNow Hourly AQ Obs file products for a UTC window and bbox, then return filtered records as JSON."

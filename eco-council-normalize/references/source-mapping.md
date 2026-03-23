@@ -45,6 +45,33 @@
 
 ## Environment Mapping
 
+### `airnow-hourly-obs-fetch`
+
+- Treated as monitoring-site hourly observations from AirNow file products.
+- The normalizer canonicalizes AirNow pollutant names into the same metric space used by modeled sources:
+  - `PM25` -> `pm2_5`
+  - `PM10` -> `pm10`
+  - `OZONE` -> `ozone`
+  - `NO2` -> `nitrogen_dioxide`
+  - `CO` -> `carbon_monoxide`
+  - `SO2` -> `sulphur_dioxide`
+- The normalizer also writes AQI companion metrics when `aqi_value` is present:
+  - `pm2_5_aqi`
+  - `pm10_aqi`
+  - `ozone_aqi`
+  - `nitrogen_dioxide_aqi`
+- Quality flags include `station-observation` or `station-aqi`, plus `preliminary` and `airnow-file-product`.
+
+### `usgs-water-iv-fetch`
+
+- Treated as station-based hydrology observations from USGS Water Services Instantaneous Values.
+- Current first-pass metric mapping is:
+  - `00060` -> `river_discharge`
+  - `00065` -> `gage_height`
+- One signal is written per site-parameter-timestamp observation.
+- Quality flags include `station-observation` and `usgs-water-services-iv`.
+- When the raw record has a provisional qualifier, the normalizer also adds `provisional`.
+
 ### `open-meteo-historical-fetch`
 
 - Produces point-based weather or soil series.
@@ -70,5 +97,6 @@
 ### `openaq-data-fetch`
 
 - API JSON results and CSV/CSV.GZ artifacts are both supported.
+- OpenAQ station metrics are canonicalized into the same metric space as AirNow and Open-Meteo where possible, for example `pm25`/`pm2.5` -> `pm2_5` and `o3` -> `ozone`.
 - Quality flags include `station-observation`.
 - Prefer API for near-real-time windows and S3 for backfill windows.

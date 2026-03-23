@@ -27,13 +27,16 @@ METEOROLOGY_METRICS = {"temperature_2m", "wind_speed_10m", "relative_humidity_2m
 PRECIPITATION_METRICS = {
     "precipitation",
     "precipitation_sum",
+    "soil_moisture_0_to_7cm",
+}
+HYDROLOGY_METRICS = {
     "river_discharge",
     "river_discharge_mean",
     "river_discharge_max",
     "river_discharge_min",
     "river_discharge_p25",
     "river_discharge_p75",
-    "soil_moisture_0_to_7cm",
+    "gage_height",
 }
 MAX_SOURCES_PER_NEXT_TASK = 2
 QUESTION_RULES = (
@@ -64,7 +67,7 @@ NEXT_ACTION_LIBRARY: dict[str, dict[str, Any]] = {
         "assigned_role": "environmentalist",
         "objective": "Add precipitation or flood-related evidence for the same mission window and geometry.",
         "reason": "Flood or water-related claims still lack direct hydrometeorological corroboration.",
-        "preferred_sources": ["open-meteo-flood-fetch", "open-meteo-historical-fetch"],
+        "preferred_sources": ["usgs-water-iv-fetch", "open-meteo-flood-fetch", "open-meteo-historical-fetch"],
     },
     "temperature-extremes": {
         "assigned_role": "environmentalist",
@@ -109,9 +112,15 @@ SOURCE_KEYWORDS = (
     ("wind", ["open-meteo-historical-fetch"]),
     ("humidity", ["open-meteo-historical-fetch"]),
     ("precipitation", ["open-meteo-historical-fetch"]),
+    ("hydrology", ["usgs-water-iv-fetch", "open-meteo-flood-fetch"]),
+    ("streamflow", ["usgs-water-iv-fetch"]),
+    ("discharge", ["usgs-water-iv-fetch", "open-meteo-flood-fetch"]),
+    ("gage", ["usgs-water-iv-fetch"]),
+    ("river", ["usgs-water-iv-fetch", "open-meteo-flood-fetch"]),
+    ("usgs", ["usgs-water-iv-fetch"]),
     ("weather", ["open-meteo-historical-fetch"]),
     ("meteorology", ["open-meteo-historical-fetch"]),
-    ("flood", ["open-meteo-flood-fetch", "open-meteo-historical-fetch"]),
+    ("flood", ["usgs-water-iv-fetch", "open-meteo-flood-fetch", "open-meteo-historical-fetch"]),
     ("temperature", ["open-meteo-historical-fetch"]),
     ("heat", ["open-meteo-historical-fetch"]),
     ("regulations", ["regulationsgov-comments-fetch", "regulationsgov-comment-detail-fetch"]),
@@ -658,7 +667,7 @@ def infer_missing_evidence_types(*, claims: list[dict[str, Any]], observations: 
         if claim_type == "wildfire" and not (observation_metrics & METEOROLOGY_METRICS):
             missing.add("meteorology-background")
 
-        if claim_type == "flood" and not (observation_metrics & PRECIPITATION_METRICS):
+        if claim_type == "flood" and not (observation_metrics & (PRECIPITATION_METRICS | HYDROLOGY_METRICS)):
             missing.add("precipitation-hydrology")
 
         if claim_type == "heat" and "temperature_2m" not in observation_metrics:

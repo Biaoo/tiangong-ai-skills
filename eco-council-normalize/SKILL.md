@@ -53,6 +53,7 @@ python3 scripts/eco_council_normalize.py normalize-public \
 python3 scripts/eco_council_normalize.py normalize-environment \
   --run-dir ./runs/20260320-chiangmai-smoke \
   --round-id round-001 \
+  --input airnow-hourly-obs-fetch=./runs/20260320-chiangmai-smoke/round_001/environmentalist/raw/airnow-hourly-obs-fetch.json \
   --input open-meteo-air-quality-fetch=./runs/20260320-chiangmai-smoke/round_001/environmentalist/raw/open-meteo-air-quality.json \
   --input nasa-firms-fire-fetch=./runs/20260320-chiangmai-smoke/round_001/environmentalist/raw/nasa-firms-fire.json \
   --pretty
@@ -88,6 +89,8 @@ Public-signal normalization currently supports:
 - manifest-only ingestion for `gdelt-events-fetch`, `gdelt-mentions-fetch`, and `gdelt-gkg-fetch`
 
 Environment normalization currently supports:
+- `airnow-hourly-obs-fetch`
+- `usgs-water-iv-fetch`
 - `open-meteo-historical-fetch`
 - `open-meteo-air-quality-fetch`
 - `open-meteo-flood-fetch`
