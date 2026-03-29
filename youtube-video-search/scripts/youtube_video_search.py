@@ -1577,7 +1577,7 @@ def command_search(args: argparse.Namespace) -> int:
         records.append(record)
 
     output_file_path: Path | None = None
-    if args.save_records and records:
+    if args.save_records:
         output_dir = Path(args.output_dir).expanduser().resolve()
         output_file_path = build_output_file_path(
             output_dir=output_dir,

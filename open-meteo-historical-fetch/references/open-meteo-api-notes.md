@@ -91,4 +91,3 @@ Examples for environmental verification:
   - `precipitation_sum`
   - `rain_sum`
   - `et0_fao_evapotranspiration`
-  - `evapotranspiration`

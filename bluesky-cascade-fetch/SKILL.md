@@ -91,7 +91,7 @@ python3 scripts/bluesky_cascade_fetch.py fetch \
   - one invocation = one configured windowed fetch task
 - No built-in scheduler/poller loops.
 - If periodic polling is needed, orchestrate repeated invocations externally.
-- If `public.api.bsky.app` returns route-level `403`, switch to `--base-url https://api.bsky.app`.
+- If `public.api.bsky.app` returns route-level `403`, the script automatically retries with `--base-url https://api.bsky.app`. Manual override is still allowed.
 
 ## References
 - `references/env.md`

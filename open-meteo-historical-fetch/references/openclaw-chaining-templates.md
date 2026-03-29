@@ -10,7 +10,7 @@ Fetch historical weather and shallow-soil data for:
 - coordinate: [LATITUDE,LONGITUDE]
 - date window: [YYYY-MM-DD] to [YYYY-MM-DD]
 - hourly vars: temperature_2m, precipitation, wind_speed_10m, soil_moisture_0_to_7cm
-- daily vars: precipitation_sum, evapotranspiration
+- daily vars: precipitation_sum, et0_fao_evapotranspiration
 Use timezone GMT and return only the JSON result.
 ```
 

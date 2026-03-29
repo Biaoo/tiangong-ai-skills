@@ -1,6 +1,6 @@
 ---
 name: open-meteo-historical-fetch
-description: Fetch Open-Meteo Historical Weather API time-window data for weather and shallow-soil variables with retries, throttling, detailed logs, and transport/structure validation. Use when tasks need deterministic physical-world context for ecology or environmental verification, such as checking historical temperature, precipitation, wind, humidity, evapotranspiration, soil temperature, or soil moisture for one or more coordinates in a specified date range.
+description: Fetch Open-Meteo Historical Weather API time-window data for weather and shallow-soil variables with retries, throttling, detailed logs, and transport/structure validation. Use when tasks need deterministic physical-world context for ecology or environmental verification, such as checking historical temperature, precipitation, wind, humidity, FAO evapotranspiration, soil temperature, or soil moisture for one or more coordinates in a specified date range.
 ---
 
 # Open-Meteo Historical Fetch
@@ -57,7 +57,7 @@ python3 scripts/open_meteo_historical_fetch.py fetch \
   --hourly-var soil_temperature_0cm \
   --hourly-var soil_moisture_0_to_7cm \
   --daily-var precipitation_sum \
-  --daily-var evapotranspiration \
+  --daily-var et0_fao_evapotranspiration \
   --model era5 \
   --timezone GMT \
   --output ./data/open-meteo/open-meteo-fetch.json \
@@ -147,7 +147,7 @@ python3 scripts/open_meteo_historical_fetch.py fetch \
   --hourly-var wind_speed_10m \
   --hourly-var soil_moisture_0_to_7cm \
   --daily-var precipitation_sum \
-  --daily-var evapotranspiration \
+  --daily-var et0_fao_evapotranspiration \
   --timezone GMT \
   --pretty
 Return only the JSON result.

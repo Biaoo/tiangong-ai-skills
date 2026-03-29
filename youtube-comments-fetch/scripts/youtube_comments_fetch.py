@@ -1507,7 +1507,62 @@ def command_fetch(args: argparse.Namespace) -> int:
         dedupe=args.dedupe,
     )
     if not video_ids:
-        raise ValueError("No video IDs provided. Use --video-id or --video-ids-file.")
+        output_file_path: Path | None = None
+        if args.save_records:
+            output_dir = Path(args.output_dir).expanduser().resolve()
+            output_file_path = build_output_file_path(
+                output_dir=output_dir,
+                output_file=args.output_file,
+            )
+            save_records_jsonl(path=output_file_path, records=[], overwrite=args.overwrite)
+        payload = {
+            "ok": True,
+            "request": {
+                "selected_video_count": 0,
+                "start_datetime": args.start_datetime or None,
+                "end_datetime": args.end_datetime or None,
+                "time_field": args.time_field,
+                "order": args.order,
+                "text_format": args.text_format,
+                "include_replies": args.include_replies,
+                "search_terms": args.search_terms or None,
+                "page_size": page_size,
+                "max_thread_pages": args.max_thread_pages,
+                "max_reply_pages": args.max_reply_pages,
+                "max_threads": args.max_threads,
+                "max_comments": args.max_comments,
+            },
+            "fetch_summary": {
+                "record_count": 0,
+                "top_level_count": 0,
+                "reply_count": 0,
+                "duplicate_comment_count": 0,
+                "outside_window_count": 0,
+                "missing_timestamp_count": 0,
+                "video_success_count": 0,
+                "video_failure_count": 0,
+                "video_skipped_count": 0,
+                "thread_pages_used": 0,
+                "reply_pages_used": 0,
+                "threads_seen": 0,
+                "reply_fetch_partial_thread_count": 0,
+                "reply_window_completeness": "not_applicable",
+            },
+            "validation_summary": {
+                "total_issue_count": 0,
+            },
+            "video_summaries": [],
+            "page_trace": [],
+            "reply_trace": [],
+            "failures": [],
+            "artifacts": {
+                "output_jsonl": str(output_file_path) if output_file_path is not None else None,
+            },
+        }
+        if args.include_records:
+            payload["records"] = []
+        print_json(payload, pretty=args.pretty)
+        return 0
     selected_video_ids = video_ids[: args.max_videos]
 
     if args.dry_run:
@@ -1903,7 +1958,7 @@ def command_fetch(args: argparse.Namespace) -> int:
     )
 
     output_file_path: Path | None = None
-    if args.save_records and records:
+    if args.save_records:
         output_dir = Path(args.output_dir).expanduser().resolve()
         output_file_path = build_output_file_path(output_dir=output_dir, output_file=args.output_file)
         save_records_jsonl(path=output_file_path, records=records, overwrite=args.overwrite)

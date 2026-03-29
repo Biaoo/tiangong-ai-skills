@@ -36,6 +36,7 @@ ENV_MAX_RETRY_AFTER_SECONDS = "BLUESKY_MAX_RETRY_AFTER_SECONDS"
 ENV_USER_AGENT = "BLUESKY_USER_AGENT"
 
 DEFAULT_BASE_URL = "https://public.api.bsky.app"
+FALLBACK_PUBLIC_READ_BASE_URL = "https://api.bsky.app"
 DEFAULT_AUTH_SERVICE_URL = "https://bsky.social"
 DEFAULT_TIMEOUT_SECONDS = 45
 DEFAULT_MAX_RETRIES = 4
@@ -768,7 +769,22 @@ class BlueskyApiClient:
         headers: dict[str, str] = {}
         if self._session is not None:
             headers["Authorization"] = f"Bearer {self._session.access_jwt}"
-        return self._http.request_json(method="GET", url=url, headers=headers)
+        try:
+            return self._http.request_json(method="GET", url=url, headers=headers)
+        except RuntimeError as exc:
+            if (
+                not use_authenticated_proxy
+                and normalize_base_url(base_url, field_name="base-url") == DEFAULT_BASE_URL
+                and "HTTP 403" in str(exc)
+            ):
+                fallback_url = self._build_url(FALLBACK_PUBLIC_READ_BASE_URL, path, query)
+                self._logger.warning(
+                    "public-read-route-forbidden retry_with_base_url=%s path=%s",
+                    FALLBACK_PUBLIC_READ_BASE_URL,
+                    path,
+                )
+                return self._http.request_json(method="GET", url=fallback_url, headers=headers)
+            raise
 
 
 def parse_key_value(raw: str, *, field_name: str) -> tuple[str, str]:
